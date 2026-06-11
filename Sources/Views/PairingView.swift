@@ -38,10 +38,6 @@ struct PairingView: View {
                     }
                     if session?.needsPin == true && !done {
                         TextField("PIN", text: $pin)
-                            #if os(iOS)
-                            .keyboardType(.numberPad)
-                            .textInputAutocapitalization(.never)
-                            #endif
                             .disableAutocorrection(true)
                             .font(.system(size: 20).monospacedDigit())
                             .multilineTextAlignment(.center)
@@ -78,9 +74,6 @@ struct PairingView: View {
                 .padding(18)
             }
             .navigationTitle(done ? "Paired \(session?.name ?? device.name)" : "Pair \(device.name)")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
         }
         .preferredColorScheme(.dark)
         .task { await start() }

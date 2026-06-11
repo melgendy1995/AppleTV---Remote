@@ -36,9 +36,6 @@ struct DevicePickerView: View {
                 }
             }
             .navigationTitle("Apple TVs on your network")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }

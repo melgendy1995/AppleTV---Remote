@@ -18,10 +18,6 @@ struct SettingsView: View {
                         .font(.system(size: 12))
                         .foregroundColor(Theme.muted)
                     TextField("http://localhost:8000", text: $draft)
-                        #if os(iOS)
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
-                        #endif
                         .disableAutocorrection(true)
                         .font(.system(size: 15).monospaced())
                         .padding(12)
@@ -51,9 +47,6 @@ struct SettingsView: View {
                 .padding(18)
             }
             .navigationTitle("Settings")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
