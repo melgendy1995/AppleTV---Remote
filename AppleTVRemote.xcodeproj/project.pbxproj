@@ -1,0 +1,493 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		01ED369074EEF82DFA621843 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6DF5CE186C83DA42B93E94A /* SettingsView.swift */; };
+		0AD980E7330E2A2C93AEA22D /* BackendController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E7CD2B3813C2F4EA72CAD24 /* BackendController.swift */; };
+		1112421A1C8797318635C8C8 /* Vendor in Resources */ = {isa = PBXBuildFile; fileRef = 9D5DA8F1D49BBDF566F26052 /* Vendor */; };
+		180497AA7D68C3DB784EE264 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B233322FCC76A0C5A9E6081B /* Assets.xcassets */; };
+		317E6705FE5C707253A40997 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A92ADED1D25FFB732613AF9 /* Models.swift */; };
+		35348A6C00AFAE89CAF0081E /* AppleTVRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECD6878F780BB6E599861E65 /* AppleTVRemoteApp.swift */; };
+		52077838710FAC5751EEAEBB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B233322FCC76A0C5A9E6081B /* Assets.xcassets */; };
+		583331DD72F78CDB22E16D5D /* BackendClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1722738B6B84E7FF556E3DF /* BackendClient.swift */; };
+		6AF025F0E59BAD4ECC6C4E22 /* RemoteControlsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5E3D62E33164449BB8B5692 /* RemoteControlsView.swift */; };
+		6B9E196381E19F21CCCA475F /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D07F82488ACFFD2FDA8EABE /* ContentView.swift */; };
+		6CCB41DDCBE9E01FBEC0F882 /* KeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5290226E2B7EB9F3E536D7DB /* KeyboardView.swift */; };
+		869F4BF6A961CD1628169F0F /* BackendClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1722738B6B84E7FF556E3DF /* BackendClient.swift */; };
+		89D17553BC1F3F0EC0BA8380 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 153A6DED0E5C0258649AE3FB /* Theme.swift */; };
+		8B6486231E82F2E8D6AACAB1 /* DevicePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CC966B427C45AB17F39E509 /* DevicePickerView.swift */; };
+		9AB4FBC0C1BA74ADAB11C3C0 /* DevicePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CC966B427C45AB17F39E509 /* DevicePickerView.swift */; };
+		A91B212EB47CB9A0901BAF0B /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A92ADED1D25FFB732613AF9 /* Models.swift */; };
+		B09CCB95954494DA9904900F /* KeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5290226E2B7EB9F3E536D7DB /* KeyboardView.swift */; };
+		B263790F30E8BA5B5DDA9998 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 153A6DED0E5C0258649AE3FB /* Theme.swift */; };
+		BCDD9CC27F2759D891D9BA1A /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84812F8ADF6CB8FC64A15C44 /* PairingView.swift */; };
+		BE27D89AF4D1B8DBBB33441A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D07F82488ACFFD2FDA8EABE /* ContentView.swift */; };
+		C55911778C38E084CADA5968 /* NowPlayingCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8696576F2F249DF508C1A15 /* NowPlayingCard.swift */; };
+		E19CDBFACF2B608BDBDB6B26 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6DF5CE186C83DA42B93E94A /* SettingsView.swift */; };
+		EBB75219C7C9F3509A13F2E2 /* BackendController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E7CD2B3813C2F4EA72CAD24 /* BackendController.swift */; };
+		EC61362AD130DC8E6F7C6F9E /* AppleTVRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECD6878F780BB6E599861E65 /* AppleTVRemoteApp.swift */; };
+		F718ECBDE723588278EA58C4 /* RemoteControlsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5E3D62E33164449BB8B5692 /* RemoteControlsView.swift */; };
+		F98D4D5D182357C97E217B2D /* NowPlayingCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8696576F2F249DF508C1A15 /* NowPlayingCard.swift */; };
+		FC20ECB5FE191C5B7E30DF1A /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84812F8ADF6CB8FC64A15C44 /* PairingView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		0CC966B427C45AB17F39E509 /* DevicePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicePickerView.swift; sourceTree = "<group>"; };
+		153A6DED0E5C0258649AE3FB /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		411C5714E2B6A3DA56F1D415 /* AppleTVRemote-iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "AppleTVRemote-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		4D07F82488ACFFD2FDA8EABE /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		5290226E2B7EB9F3E536D7DB /* KeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardView.swift; sourceTree = "<group>"; };
+		7E7CD2B3813C2F4EA72CAD24 /* BackendController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendController.swift; sourceTree = "<group>"; };
+		84812F8ADF6CB8FC64A15C44 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
+		9A92ADED1D25FFB732613AF9 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		9D5DA8F1D49BBDF566F26052 /* Vendor */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Vendor; sourceTree = SOURCE_ROOT; };
+		B233322FCC76A0C5A9E6081B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		C5A8F9F5476DA2C04B66EC5F /* AppleTVRemote-macOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "AppleTVRemote-macOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		C5E3D62E33164449BB8B5692 /* RemoteControlsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteControlsView.swift; sourceTree = "<group>"; };
+		E8696576F2F249DF508C1A15 /* NowPlayingCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingCard.swift; sourceTree = "<group>"; };
+		ECD6878F780BB6E599861E65 /* AppleTVRemoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleTVRemoteApp.swift; sourceTree = "<group>"; };
+		F1722738B6B84E7FF556E3DF /* BackendClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendClient.swift; sourceTree = "<group>"; };
+		F6DF5CE186C83DA42B93E94A /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		286BC268DC90EE1E8CBF8CDD = {
+			isa = PBXGroup;
+			children = (
+				9D5DA8F1D49BBDF566F26052 /* Vendor */,
+				CCD843D51F05C7E237CE4592 /* Sources */,
+				611AF5DDA02954B9B4EC83C2 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		5043DCC7860137A5D3F04484 /* Networking */ = {
+			isa = PBXGroup;
+			children = (
+				F1722738B6B84E7FF556E3DF /* BackendClient.swift */,
+				7E7CD2B3813C2F4EA72CAD24 /* BackendController.swift */,
+			);
+			path = Networking;
+			sourceTree = "<group>";
+		};
+		611AF5DDA02954B9B4EC83C2 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				411C5714E2B6A3DA56F1D415 /* AppleTVRemote-iOS.app */,
+				C5A8F9F5476DA2C04B66EC5F /* AppleTVRemote-macOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		9DFBE3E5C485A91BCE78BB49 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				4D07F82488ACFFD2FDA8EABE /* ContentView.swift */,
+				0CC966B427C45AB17F39E509 /* DevicePickerView.swift */,
+				5290226E2B7EB9F3E536D7DB /* KeyboardView.swift */,
+				E8696576F2F249DF508C1A15 /* NowPlayingCard.swift */,
+				84812F8ADF6CB8FC64A15C44 /* PairingView.swift */,
+				C5E3D62E33164449BB8B5692 /* RemoteControlsView.swift */,
+				F6DF5CE186C83DA42B93E94A /* SettingsView.swift */,
+				153A6DED0E5C0258649AE3FB /* Theme.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		ABFF0B513C774FF636430B5B /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				9A92ADED1D25FFB732613AF9 /* Models.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		CCD843D51F05C7E237CE4592 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				ECD6878F780BB6E599861E65 /* AppleTVRemoteApp.swift */,
+				B233322FCC76A0C5A9E6081B /* Assets.xcassets */,
+				ABFF0B513C774FF636430B5B /* Models */,
+				5043DCC7860137A5D3F04484 /* Networking */,
+				9DFBE3E5C485A91BCE78BB49 /* Views */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		5A8A2B9654F99CA92DE640C8 /* AppleTVRemote-iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E60061C9D46E8A235222C5E8 /* Build configuration list for PBXNativeTarget "AppleTVRemote-iOS" */;
+			buildPhases = (
+				3E63D1FF55B174E1B05BFCF2 /* Sources */,
+				D557C9BE30E91C397FDC6DFC /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "AppleTVRemote-iOS";
+			packageProductDependencies = (
+			);
+			productName = "AppleTVRemote-iOS";
+			productReference = 411C5714E2B6A3DA56F1D415 /* AppleTVRemote-iOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+		ABC37DC4048EE1EECEDDC3BE /* AppleTVRemote-macOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E72E717C7DC3A6BC8780ED8B /* Build configuration list for PBXNativeTarget "AppleTVRemote-macOS" */;
+			buildPhases = (
+				6FA364EAAE7378F7463FDF14 /* Sources */,
+				633941D3ACF414E3B3620584 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "AppleTVRemote-macOS";
+			packageProductDependencies = (
+			);
+			productName = "AppleTVRemote-macOS";
+			productReference = C5A8F9F5476DA2C04B66EC5F /* AppleTVRemote-macOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		D614741D70A147CC60644E00 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					5A8A2B9654F99CA92DE640C8 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+					ABC37DC4048EE1EECEDDC3BE = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 1219AB2E7AB487E6A81C936A /* Build configuration list for PBXProject "AppleTVRemote" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 286BC268DC90EE1E8CBF8CDD;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 611AF5DDA02954B9B4EC83C2 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				5A8A2B9654F99CA92DE640C8 /* AppleTVRemote-iOS */,
+				ABC37DC4048EE1EECEDDC3BE /* AppleTVRemote-macOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		633941D3ACF414E3B3620584 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				52077838710FAC5751EEAEBB /* Assets.xcassets in Resources */,
+				1112421A1C8797318635C8C8 /* Vendor in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D557C9BE30E91C397FDC6DFC /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				180497AA7D68C3DB784EE264 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		3E63D1FF55B174E1B05BFCF2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EC61362AD130DC8E6F7C6F9E /* AppleTVRemoteApp.swift in Sources */,
+				869F4BF6A961CD1628169F0F /* BackendClient.swift in Sources */,
+				EBB75219C7C9F3509A13F2E2 /* BackendController.swift in Sources */,
+				BE27D89AF4D1B8DBBB33441A /* ContentView.swift in Sources */,
+				9AB4FBC0C1BA74ADAB11C3C0 /* DevicePickerView.swift in Sources */,
+				6CCB41DDCBE9E01FBEC0F882 /* KeyboardView.swift in Sources */,
+				A91B212EB47CB9A0901BAF0B /* Models.swift in Sources */,
+				C55911778C38E084CADA5968 /* NowPlayingCard.swift in Sources */,
+				BCDD9CC27F2759D891D9BA1A /* PairingView.swift in Sources */,
+				6AF025F0E59BAD4ECC6C4E22 /* RemoteControlsView.swift in Sources */,
+				E19CDBFACF2B608BDBDB6B26 /* SettingsView.swift in Sources */,
+				89D17553BC1F3F0EC0BA8380 /* Theme.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6FA364EAAE7378F7463FDF14 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				35348A6C00AFAE89CAF0081E /* AppleTVRemoteApp.swift in Sources */,
+				583331DD72F78CDB22E16D5D /* BackendClient.swift in Sources */,
+				0AD980E7330E2A2C93AEA22D /* BackendController.swift in Sources */,
+				6B9E196381E19F21CCCA475F /* ContentView.swift in Sources */,
+				8B6486231E82F2E8D6AACAB1 /* DevicePickerView.swift in Sources */,
+				B09CCB95954494DA9904900F /* KeyboardView.swift in Sources */,
+				317E6705FE5C707253A40997 /* Models.swift in Sources */,
+				F98D4D5D182357C97E217B2D /* NowPlayingCard.swift in Sources */,
+				FC20ECB5FE191C5B7E30DF1A /* PairingView.swift in Sources */,
+				F718ECBDE723588278EA58C4 /* RemoteControlsView.swift in Sources */,
+				01ED369074EEF82DFA621843 /* SettingsView.swift in Sources */,
+				B263790F30E8BA5B5DDA9998 /* Theme.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		135D9AFF1D3863A839FA2EAC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "Entitlements-macOS.plist";
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = "Info-macOS.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.mahmoudelgendy.AppleTVRemote;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		1B0A1BDF32AA447C3AA260D8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = "Info-iOS.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.mahmoudelgendy.AppleTVRemote.iOS;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		4F5E2F8486DAC3BDF3EDDC66 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "Apple TV Remote";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.10;
+			};
+			name = Debug;
+		};
+		7724D01CEF91AFECA3BF88D9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "Apple TV Remote";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.10;
+			};
+			name = Release;
+		};
+		CFE595B41E6BEF90C7C591DA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = "Info-iOS.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.mahmoudelgendy.AppleTVRemote.iOS;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		DA1ED00226EC81C266FFA603 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "Entitlements-macOS.plist";
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = "Info-macOS.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.mahmoudelgendy.AppleTVRemote;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		1219AB2E7AB487E6A81C936A /* Build configuration list for PBXProject "AppleTVRemote" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4F5E2F8486DAC3BDF3EDDC66 /* Debug */,
+				7724D01CEF91AFECA3BF88D9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E60061C9D46E8A235222C5E8 /* Build configuration list for PBXNativeTarget "AppleTVRemote-iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1B0A1BDF32AA447C3AA260D8 /* Debug */,
+				CFE595B41E6BEF90C7C591DA /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E72E717C7DC3A6BC8780ED8B /* Build configuration list for PBXNativeTarget "AppleTVRemote-macOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DA1ED00226EC81C266FFA603 /* Debug */,
+				135D9AFF1D3863A839FA2EAC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = D614741D70A147CC60644E00 /* Project object */;
+}

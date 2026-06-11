@@ -1,0 +1,6 @@
+#!/Users/mahmoudelgendy/Projects/appletv-remote/swift-app/Vendor/python/bin/python3
+import sys
+from setup import make_md_docs
+if __name__ == '__main__':
+    sys.argv[0] = sys.argv[0].removesuffix('.exe')
+    sys.exit(make_md_docs())
