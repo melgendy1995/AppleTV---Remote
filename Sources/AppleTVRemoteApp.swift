@@ -1,16 +1,14 @@
 import SwiftUI
+import AppKit
 
 @main
 struct AppleTVRemoteApp: App {
     @StateObject private var client = BackendClient()
-    #if os(macOS)
     @StateObject private var backend = BackendController()
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    #endif
 
     var body: some Scene {
         WindowGroup {
-            #if os(macOS)
             RootView()
                 .environmentObject(client)
                 .environmentObject(backend)
@@ -22,13 +20,7 @@ struct AppleTVRemoteApp: App {
                     }
                     await client.refreshStatus()
                 }
-            #else
-            ContentView()
-                .environmentObject(client)
-                .task { await client.refreshStatus() }
-            #endif
         }
-        #if os(macOS)
         .defaultSize(width: 380, height: 680)
         .windowResizability(.contentSize)
         .commands {
@@ -37,12 +29,8 @@ struct AppleTVRemoteApp: App {
                     .keyboardShortcut(",", modifiers: .command)
             }
         }
-        #endif
     }
 }
-
-#if os(macOS)
-import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var backend: BackendController?
@@ -106,7 +94,6 @@ struct BackendBootView: View {
         .preferredColorScheme(.dark)
     }
 }
-#endif
 
 extension Notification.Name {
     static let openSettings = Notification.Name("ATV.openSettings")

@@ -95,10 +95,6 @@ struct RemoteControlsView: View {
 
     private func send(_ command: String) {
         Task { await client.sendCommand(command) }
-        #if os(iOS)
-        let gen = UIImpactFeedbackGenerator(style: .light)
-        gen.impactOccurred()
-        #endif
     }
 }
 

@@ -21,9 +21,6 @@ struct KeyboardView: View {
                         .font(.system(size: 13))
                         .foregroundColor(Theme.muted)
                     TextField("Type here", text: $text)
-                        #if os(iOS)
-                        .textInputAutocapitalization(.never)
-                        #endif
                         .disableAutocorrection(true)
                         .font(.system(size: 18))
                         .padding(12)
@@ -44,9 +41,6 @@ struct KeyboardView: View {
                 .padding(18)
             }
             .navigationTitle("Keyboard")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }

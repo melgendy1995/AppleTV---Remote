@@ -2,7 +2,6 @@ name: AppleTVRemote
 options:
   deploymentTarget:
     macOS: "14.0"
-    iOS: "17.0"
   bundleIdPrefix: com.mahmoudelgendy
   createIntermediateGroups: true
 
@@ -44,31 +43,3 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.mahmoudelgendy.AppleTVRemote
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_ENTITLEMENTS: Entitlements-macOS.plist
-
-  AppleTVRemote-iOS:
-    type: application
-    platform: iOS
-    sources:
-      - path: Sources
-    info:
-      path: Info-iOS.plist
-      properties:
-        CFBundleDisplayName: Apple TV Remote
-        UILaunchScreen: {}
-        UISupportedInterfaceOrientations:
-          - UIInterfaceOrientationPortrait
-        UISupportedInterfaceOrientations~ipad:
-          - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationPortraitUpsideDown
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
-        NSAppTransportSecurity:
-          NSAllowsLocalNetworking: YES
-          NSAllowsArbitraryLoads: YES
-        NSLocalNetworkUsageDescription: "Used to talk to the Apple TV control backend on your LAN."
-        NSBonjourServices:
-          - "_http._tcp"
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.mahmoudelgendy.AppleTVRemote.iOS
-        TARGETED_DEVICE_FAMILY: "1,2"

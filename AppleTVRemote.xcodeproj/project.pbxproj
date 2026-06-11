@@ -10,27 +10,14 @@
 		01ED369074EEF82DFA621843 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6DF5CE186C83DA42B93E94A /* SettingsView.swift */; };
 		0AD980E7330E2A2C93AEA22D /* BackendController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E7CD2B3813C2F4EA72CAD24 /* BackendController.swift */; };
 		1112421A1C8797318635C8C8 /* Vendor in Resources */ = {isa = PBXBuildFile; fileRef = 9D5DA8F1D49BBDF566F26052 /* Vendor */; };
-		180497AA7D68C3DB784EE264 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B233322FCC76A0C5A9E6081B /* Assets.xcassets */; };
 		317E6705FE5C707253A40997 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A92ADED1D25FFB732613AF9 /* Models.swift */; };
 		35348A6C00AFAE89CAF0081E /* AppleTVRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECD6878F780BB6E599861E65 /* AppleTVRemoteApp.swift */; };
 		52077838710FAC5751EEAEBB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B233322FCC76A0C5A9E6081B /* Assets.xcassets */; };
 		583331DD72F78CDB22E16D5D /* BackendClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1722738B6B84E7FF556E3DF /* BackendClient.swift */; };
-		6AF025F0E59BAD4ECC6C4E22 /* RemoteControlsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5E3D62E33164449BB8B5692 /* RemoteControlsView.swift */; };
 		6B9E196381E19F21CCCA475F /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D07F82488ACFFD2FDA8EABE /* ContentView.swift */; };
-		6CCB41DDCBE9E01FBEC0F882 /* KeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5290226E2B7EB9F3E536D7DB /* KeyboardView.swift */; };
-		869F4BF6A961CD1628169F0F /* BackendClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1722738B6B84E7FF556E3DF /* BackendClient.swift */; };
-		89D17553BC1F3F0EC0BA8380 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 153A6DED0E5C0258649AE3FB /* Theme.swift */; };
 		8B6486231E82F2E8D6AACAB1 /* DevicePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CC966B427C45AB17F39E509 /* DevicePickerView.swift */; };
-		9AB4FBC0C1BA74ADAB11C3C0 /* DevicePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CC966B427C45AB17F39E509 /* DevicePickerView.swift */; };
-		A91B212EB47CB9A0901BAF0B /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A92ADED1D25FFB732613AF9 /* Models.swift */; };
 		B09CCB95954494DA9904900F /* KeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5290226E2B7EB9F3E536D7DB /* KeyboardView.swift */; };
 		B263790F30E8BA5B5DDA9998 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 153A6DED0E5C0258649AE3FB /* Theme.swift */; };
-		BCDD9CC27F2759D891D9BA1A /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84812F8ADF6CB8FC64A15C44 /* PairingView.swift */; };
-		BE27D89AF4D1B8DBBB33441A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D07F82488ACFFD2FDA8EABE /* ContentView.swift */; };
-		C55911778C38E084CADA5968 /* NowPlayingCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8696576F2F249DF508C1A15 /* NowPlayingCard.swift */; };
-		E19CDBFACF2B608BDBDB6B26 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6DF5CE186C83DA42B93E94A /* SettingsView.swift */; };
-		EBB75219C7C9F3509A13F2E2 /* BackendController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E7CD2B3813C2F4EA72CAD24 /* BackendController.swift */; };
-		EC61362AD130DC8E6F7C6F9E /* AppleTVRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECD6878F780BB6E599861E65 /* AppleTVRemoteApp.swift */; };
 		F718ECBDE723588278EA58C4 /* RemoteControlsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5E3D62E33164449BB8B5692 /* RemoteControlsView.swift */; };
 		F98D4D5D182357C97E217B2D /* NowPlayingCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8696576F2F249DF508C1A15 /* NowPlayingCard.swift */; };
 		FC20ECB5FE191C5B7E30DF1A /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84812F8ADF6CB8FC64A15C44 /* PairingView.swift */; };
@@ -39,7 +26,6 @@
 /* Begin PBXFileReference section */
 		0CC966B427C45AB17F39E509 /* DevicePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicePickerView.swift; sourceTree = "<group>"; };
 		153A6DED0E5C0258649AE3FB /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
-		411C5714E2B6A3DA56F1D415 /* AppleTVRemote-iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "AppleTVRemote-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		4D07F82488ACFFD2FDA8EABE /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		5290226E2B7EB9F3E536D7DB /* KeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardView.swift; sourceTree = "<group>"; };
 		7E7CD2B3813C2F4EA72CAD24 /* BackendController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendController.swift; sourceTree = "<group>"; };
@@ -77,7 +63,6 @@
 		611AF5DDA02954B9B4EC83C2 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				411C5714E2B6A3DA56F1D415 /* AppleTVRemote-iOS.app */,
 				C5A8F9F5476DA2C04B66EC5F /* AppleTVRemote-macOS.app */,
 			);
 			name = Products;
@@ -121,24 +106,6 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		5A8A2B9654F99CA92DE640C8 /* AppleTVRemote-iOS */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = E60061C9D46E8A235222C5E8 /* Build configuration list for PBXNativeTarget "AppleTVRemote-iOS" */;
-			buildPhases = (
-				3E63D1FF55B174E1B05BFCF2 /* Sources */,
-				D557C9BE30E91C397FDC6DFC /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			name = "AppleTVRemote-iOS";
-			packageProductDependencies = (
-			);
-			productName = "AppleTVRemote-iOS";
-			productReference = 411C5714E2B6A3DA56F1D415 /* AppleTVRemote-iOS.app */;
-			productType = "com.apple.product-type.application";
-		};
 		ABC37DC4048EE1EECEDDC3BE /* AppleTVRemote-macOS */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = E72E717C7DC3A6BC8780ED8B /* Build configuration list for PBXNativeTarget "AppleTVRemote-macOS" */;
@@ -166,10 +133,6 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
-					5A8A2B9654F99CA92DE640C8 = {
-						DevelopmentTeam = "";
-						ProvisioningStyle = Automatic;
-					};
 					ABC37DC4048EE1EECEDDC3BE = {
 						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
@@ -190,7 +153,6 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				5A8A2B9654F99CA92DE640C8 /* AppleTVRemote-iOS */,
 				ABC37DC4048EE1EECEDDC3BE /* AppleTVRemote-macOS */,
 			);
 		};
@@ -206,36 +168,9 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		D557C9BE30E91C397FDC6DFC /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				180497AA7D68C3DB784EE264 /* Assets.xcassets in Resources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		3E63D1FF55B174E1B05BFCF2 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				EC61362AD130DC8E6F7C6F9E /* AppleTVRemoteApp.swift in Sources */,
-				869F4BF6A961CD1628169F0F /* BackendClient.swift in Sources */,
-				EBB75219C7C9F3509A13F2E2 /* BackendController.swift in Sources */,
-				BE27D89AF4D1B8DBBB33441A /* ContentView.swift in Sources */,
-				9AB4FBC0C1BA74ADAB11C3C0 /* DevicePickerView.swift in Sources */,
-				6CCB41DDCBE9E01FBEC0F882 /* KeyboardView.swift in Sources */,
-				A91B212EB47CB9A0901BAF0B /* Models.swift in Sources */,
-				C55911778C38E084CADA5968 /* NowPlayingCard.swift in Sources */,
-				BCDD9CC27F2759D891D9BA1A /* PairingView.swift in Sources */,
-				6AF025F0E59BAD4ECC6C4E22 /* RemoteControlsView.swift in Sources */,
-				E19CDBFACF2B608BDBDB6B26 /* SettingsView.swift in Sources */,
-				89D17553BC1F3F0EC0BA8380 /* Theme.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		6FA364EAAE7378F7463FDF14 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -274,22 +209,6 @@
 				SDKROOT = macosx;
 			};
 			name = Release;
-		};
-		1B0A1BDF32AA447C3AA260D8 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "iPhone Developer";
-				INFOPLIST_FILE = "Info-iOS.plist";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.mahmoudelgendy.AppleTVRemote.iOS;
-				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = "1,2";
-			};
-			name = Debug;
 		};
 		4F5E2F8486DAC3BDF3EDDC66 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -348,13 +267,13 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.1.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "Apple TV Remote";
+				SDKROOT = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.10;
@@ -412,31 +331,15 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.1.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "Apple TV Remote";
+				SDKROOT = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.10;
-			};
-			name = Release;
-		};
-		CFE595B41E6BEF90C7C591DA /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_IDENTITY = "iPhone Developer";
-				INFOPLIST_FILE = "Info-iOS.plist";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.mahmoudelgendy.AppleTVRemote.iOS;
-				SDKROOT = iphoneos;
-				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -465,15 +368,6 @@
 			buildConfigurations = (
 				4F5E2F8486DAC3BDF3EDDC66 /* Debug */,
 				7724D01CEF91AFECA3BF88D9 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Debug;
-		};
-		E60061C9D46E8A235222C5E8 /* Build configuration list for PBXNativeTarget "AppleTVRemote-iOS" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				1B0A1BDF32AA447C3AA260D8 /* Debug */,
-				CFE595B41E6BEF90C7C591DA /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
