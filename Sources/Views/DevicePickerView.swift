@@ -5,6 +5,7 @@ struct DevicePickerView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var scanning = false
     @State private var confirmUnpairFor: DeviceInfo?
+    @State private var connectingTo: String?
 
     let onPair: (DeviceInfo) -> Void
 
@@ -84,12 +85,24 @@ struct DevicePickerView: View {
                 .background(device.isPaired ? Theme.good.opacity(0.2) : Theme.border)
                 .foregroundColor(device.isPaired ? Theme.good : Theme.muted)
                 .clipShape(Capsule())
-            Button(device.isPaired ? "Connect" : "Pair") {
+            Button {
                 if device.isPaired {
-                    Task { try? await client.connect(to: device); dismiss() }
+                    connect(device)
                 } else {
                     onPair(device)
                 }
+            } label: {
+                Group {
+                    if connectingTo == device.identifier {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .controlSize(.small)
+                            .tint(.white)
+                    } else {
+                        Text(device.isPaired ? "Connect" : "Pair")
+                    }
+                }
+                .frame(minWidth: 56)
             }
             .font(.system(size: 12, weight: .semibold))
             .foregroundColor(device.isPaired ? .white : Theme.text)
@@ -98,6 +111,7 @@ struct DevicePickerView: View {
             .overlay(Capsule().stroke(device.isPaired ? Theme.accent : Theme.border, lineWidth: 1))
             .clipShape(Capsule())
             .buttonStyle(.plain)
+            .disabled(connectingTo != nil)
 
             if device.isPaired {
                 Menu {
@@ -129,6 +143,15 @@ struct DevicePickerView: View {
         Task {
             await client.scan()
             scanning = false
+        }
+    }
+
+    private func connect(_ device: DeviceInfo) {
+        connectingTo = device.identifier
+        Task {
+            let ok = (try? await client.connect(to: device)) != nil
+            connectingTo = nil
+            if ok { dismiss() }
         }
     }
 }
