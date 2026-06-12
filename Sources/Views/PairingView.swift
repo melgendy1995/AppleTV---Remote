@@ -12,6 +12,7 @@ struct PairingView: View {
     @State private var error: String?
     @State private var busy = false
     @State private var done = false
+    @State private var connecting = false
 
     var body: some View {
         NavigationStack {
@@ -64,11 +65,23 @@ struct PairingView: View {
                             cancel()
                         }
                         .buttonStyle(SurfaceButton())
-                        Button(done ? "Connect now" : (session?.needsPin == true ? "Submit PIN" : "Continue")) {
+                        Button {
                             if done { connectAfterPair() } else { submit() }
+                        } label: {
+                            Group {
+                                if connecting {
+                                    ProgressView()
+                                        .progressViewStyle(.circular)
+                                        .controlSize(.small)
+                                        .tint(.white)
+                                } else {
+                                    Text(done ? "Connect now" : (session?.needsPin == true ? "Submit PIN" : "Continue"))
+                                }
+                            }
+                            .frame(minWidth: 80)
                         }
                         .buttonStyle(PrimaryButton())
-                        .disabled(busy || (session == nil && !done))
+                        .disabled(busy || connecting || (session == nil && !done))
                     }
                 }
                 .padding(18)
@@ -169,9 +182,11 @@ struct PairingView: View {
         let connectDevice = DeviceInfo(identifier: identifier, name: session?.name ?? device.name,
                                        address: device.address, model: device.model,
                                        services: device.services, isPaired: true)
+        connecting = true
         Task {
-            try? await client.connect(to: connectDevice)
-            dismiss()
+            let ok = (try? await client.connect(to: connectDevice)) != nil
+            connecting = false
+            if ok { dismiss() }
         }
     }
 }
