@@ -6,7 +6,7 @@ import logging
 from typing import Any, Callable
 
 import pyatv
-from pyatv.const import Protocol
+from pyatv.const import OperatingSystem, Protocol
 from pyatv.interface import AppleTV, KeyboardListener, PushListener
 
 from . import storage
@@ -74,13 +74,15 @@ class ATVManager:
         saved = storage.load_all()
         devices: list[DeviceInfo] = []
         for cfg in configs:
+            if not cfg.device_info or cfg.device_info.operating_system != OperatingSystem.TvOS:
+                continue
             ident = cfg.identifier or ""
             devices.append(
                 DeviceInfo(
                     identifier=ident,
                     name=cfg.name,
                     address=str(cfg.address),
-                    model=str(cfg.device_info.model) if cfg.device_info else None,
+                    model=str(cfg.device_info.model),
                     services=[s.protocol.name for s in cfg.services],
                     is_paired=ident in saved,
                 )
