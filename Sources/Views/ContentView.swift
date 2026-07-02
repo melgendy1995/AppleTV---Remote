@@ -5,6 +5,7 @@ struct ContentView: View {
     @State private var showDevicePicker = false
     @State private var showSettings = false
     @State private var showKeyboard = false
+    @State private var showCapture = false
     @State private var keyboardAutoOpened = false
     @State private var pairingDevice: DeviceInfo?
 
@@ -47,6 +48,9 @@ struct ContentView: View {
             KeyboardView(autoOpened: $keyboardAutoOpened)
                 .environmentObject(client)
         }
+        .sheet(isPresented: $showCapture) {
+            ScreenCaptureView()
+        }
         .sheet(item: $pairingDevice) { device in
             PairingView(device: device)
                 .environmentObject(client)
@@ -75,6 +79,10 @@ struct ContentView: View {
                 .buttonStyle(IconButton())
                 .help("Keyboard")
                 .disabled(!client.connected)
+
+            Button { showCapture = true } label: { Text("📷") }
+                .buttonStyle(IconButton())
+                .help("Capture Apple TV screen")
 
             Button { Task { await client.refreshPlaying(); await client.scan() } } label: { Text("↻") }
                 .buttonStyle(IconButton())

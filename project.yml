@@ -38,6 +38,7 @@ targets:
         NSLocalNetworkUsageDescription: "Used to talk to the Apple TV control backend on your LAN."
         NSBonjourServices:
           - "_http._tcp"
+        NSScreenCaptureUsageDescription: "Used to capture screenshots and recordings of the Apple TV screen from QuickTime Player."
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.mahmoudelgendy.AppleTVRemote
