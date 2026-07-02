@@ -5,6 +5,7 @@ import AppKit
 struct AppleTVRemoteApp: App {
     @StateObject private var client = BackendClient()
     @StateObject private var backend = BackendController()
+    @StateObject private var capture = CaptureCoordinator()
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
@@ -12,6 +13,7 @@ struct AppleTVRemoteApp: App {
             RootView()
                 .environmentObject(client)
                 .environmentObject(backend)
+                .environmentObject(capture)
                 .task {
                     appDelegate.backend = backend
                     await backend.startIfEmbedded()
@@ -21,7 +23,7 @@ struct AppleTVRemoteApp: App {
                     await client.refreshStatus()
                 }
         }
-        .defaultSize(width: 380, height: 680)
+        .defaultSize(width: 1200, height: 720)
         .windowResizability(.contentSize)
         .commands {
             CommandGroup(after: .appInfo) {
