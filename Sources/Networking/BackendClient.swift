@@ -16,6 +16,35 @@ final class BackendClient: ObservableObject {
 
     private var wsTask: URLSessionWebSocketTask?
     private let session = URLSession(configuration: .default)
+    /// Exponential backoff for WebSocket reconnects; reset on a healthy receive.
+    private var wsReconnectDelay: TimeInterval = 1.5
+    /// Last device we were connected to — used to re-establish the connection
+    /// after a network drop (the backend tears its side down and reports
+    /// disconnected; only the client knows to try again).
+    private var lastConnectedIdentifier: String?
+    /// Manual disconnect opts out of auto-connect until the user connects
+    /// something again; failures back off briefly so a broken setup doesn't
+    /// retry on every scan.
+    private var autoConnectSuppressed = false
+    private var autoConnectInFlight = false
+    private var autoConnectCooldownUntil: Date?
+
+    /// Connect automatically when a paired device shows up in scan results.
+    /// Called after every scan; no-ops when already connected, suppressed by
+    /// a manual disconnect, or cooling down after a failed attempt.
+    private func autoConnectIfPossible() async {
+        guard !connected, !autoConnectSuppressed, !autoConnectInFlight else { return }
+        if let until = autoConnectCooldownUntil, Date() < until { return }
+        guard let device = devices.first(where: { $0.isPaired && !$0.address.isEmpty && $0.address != "not detected yet" }) else { return }
+        autoConnectInFlight = true
+        defer { autoConnectInFlight = false }
+        do {
+            try await connect(to: device)
+            autoConnectCooldownUntil = nil
+        } catch {
+            autoConnectCooldownUntil = Date().addingTimeInterval(60)
+        }
+    }
 
     var backendURL: URL? { URL(string: backendURLString) }
     var wsURL: URL? {
@@ -63,6 +92,7 @@ final class BackendClient: ObservableObject {
             let s: StatusResponse = try await request("GET", "api/status")
             backendReachable = true
             if s.connected, let ident = s.identifier {
+                lastConnectedIdentifier = ident
                 if let saved = try? await fetchSaved() {
                     savedDevices = saved
                     if let entry = saved[ident] {
@@ -85,22 +115,86 @@ final class BackendClient: ObservableObject {
         }
     }
 
-    func scan() async {
+    func scan(timeout: Int = 12) async {
         do {
-            devices = try await request("GET", "api/devices?timeout=4")
+            devices = try await request("GET", "api/devices?timeout=\(timeout)")
             savedDevices = try await fetchSaved()
-            for (k, v) in savedDevices {
-                if let idx = devices.firstIndex(where: { $0.identifier == k }) {
-                    // server already returns is_paired; sync the saved name in case it differs
-                    if devices[idx].name != v.name {
-                        let d = devices[idx]
-                        devices[idx] = DeviceInfo(identifier: d.identifier, name: v.name, address: d.address,
-                                                  model: d.model, services: d.services, isPaired: true)
-                    }
-                }
-            }
+            mergeSavedNames()
         } catch {
             lastError = "Scan failed: \(error.localizedDescription)"
+        }
+        await autoConnectIfPossible()
+    }
+
+    /// Populate `devices` from saved credentials so the picker has content
+    /// immediately instead of staring at an empty list until a scan finishes.
+    /// The real scan result replaces this placeholder list when it lands.
+    func seedDevicesFromSaved() {
+        guard devices.isEmpty else { return }
+        devices = dedupedSavedDevices(address: "")
+    }
+
+    /// The saved-credentials file often holds the SAME physical Apple TV
+    /// under several identifier formats (UUID, MAC with/without colons) —
+    /// pairing over different protocols stores different keys. The third
+    /// field of each pyatv credential is the hex-encoded real device UUID,
+    /// identical across every entry for the same TV, so group on it and
+    /// emit one row per physical device.
+    private func dedupedSavedDevices(address: String) -> [DeviceInfo] {
+        var best: [String: (id: String, entry: SavedDeviceEntry)] = [:]
+        for (id, entry) in savedDevices {
+            let key = physicalKey(for: id, entry: entry)
+            if let existing = best[key] {
+                // Prefer the saved key equal to the real device UUID.
+                if existing.id != key && id == key { best[key] = (id, entry) }
+            } else {
+                best[key] = (id, entry)
+            }
+        }
+        return best.values
+            .map { DeviceInfo(identifier: $0.id, name: $0.entry.name, address: address,
+                              model: nil, services: Array($0.entry.credentials.keys), isPaired: true) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private func physicalKey(for identifier: String, entry: SavedDeviceEntry) -> String {
+        for cred in entry.credentials.values {
+            let parts = cred.split(separator: ":")
+            if parts.count >= 3, let decoded = String(hexEncoded: String(parts[2])), !decoded.isEmpty {
+                return decoded
+            }
+        }
+        return identifier
+    }
+
+    /// Unicast-scan a single host (IP or `.local`) and merge any found Apple
+    /// TVs into ``devices``. Use when broad mDNS scan misses a device — e.g.
+    /// on networks where a VPN tunnel captures the multicast route or the
+    /// Apple TV sits on a different subnet.
+    func addDeviceByHost(_ host: String) async throws -> [DeviceInfo] {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let found: [DeviceInfo] = try await request("POST", "api/devices/by-host",
+                                                    body: ["host": trimmed])
+        for d in found {
+            if let idx = devices.firstIndex(where: { $0.identifier == d.identifier }) {
+                devices[idx] = d
+            } else {
+                devices.append(d)
+            }
+        }
+        mergeSavedNames()
+        return found
+    }
+
+    private func mergeSavedNames() {
+        for (k, v) in savedDevices {
+            if let idx = devices.firstIndex(where: { $0.identifier == k }),
+               devices[idx].name != v.name {
+                let d = devices[idx]
+                devices[idx] = DeviceInfo(identifier: d.identifier, name: v.name, address: d.address,
+                                          model: d.model, services: d.services, isPaired: true)
+            }
         }
     }
 
@@ -128,11 +222,46 @@ final class BackendClient: ObservableObject {
         let info: DeviceInfo = try await request("POST", "api/connect/\(escape(device.identifier))")
         connectedDevice = info
         connected = true
+        lastConnectedIdentifier = device.identifier
+        autoConnectSuppressed = false
         openWebSocket()
         await refreshPlaying()
     }
 
+    /// Refresh-button action: re-check backend status and, if the Apple TV
+    /// connection was lost (network drop etc.), re-establish it using the
+    /// saved credentials. Falls back to a device scan when reconnect isn't
+    /// possible (e.g. never connected, or credentials forgotten).
+    func refreshAndReconnect() async {
+        await refreshStatus()
+        if connected {
+            // A dead connection is only detected server-side when an RPC
+            // fails — poke it, then re-read the (possibly updated) status.
+            await refreshPlaying()
+            await refreshStatus()
+        }
+        if !connected {
+            await tryReconnect()
+        }
+        if connected {
+            await refreshPlaying()
+        }
+        // else: refreshStatus's else-branch already ran a device scan.
+    }
+
+    private func tryReconnect() async {
+        guard let id = lastConnectedIdentifier, let entry = savedDevices[id] else { return }
+        let device = DeviceInfo(identifier: id, name: entry.name, address: "",
+                                model: nil, services: Array(entry.credentials.keys), isPaired: true)
+        do {
+            try await connect(to: device)
+        } catch {
+            lastError = "Reconnect failed: \(error.localizedDescription)"
+        }
+    }
+
     func disconnect() async {
+        autoConnectSuppressed = true
         try? await post("api/disconnect")
         connected = false
         connectedDevice = nil
@@ -169,9 +298,16 @@ final class BackendClient: ObservableObject {
 
     // MARK: - Keyboard
 
-    func keyboardSet(_ text: String) async {
-        do { try await post("api/keyboard", body: ["text": text]) }
-        catch { lastError = "Keyboard set failed: \(error.localizedDescription)" }
+    /// Returns true when the POST succeeded (callers track last-sent state).
+    @discardableResult
+    func keyboardSet(_ text: String) async -> Bool {
+        do {
+            try await post("api/keyboard", body: ["text": text])
+            return true
+        } catch {
+            lastError = "Keyboard set failed: \(error.localizedDescription)"
+            return false
+        }
     }
 
     func keyboardAppend(_ text: String) async {
@@ -206,16 +342,24 @@ final class BackendClient: ObservableObject {
         while wsTask === task {
             do {
                 let message = try await task.receive()
+                // Healthy stream — reset the backoff.
+                wsReconnectDelay = 1.5
                 switch message {
                 case .data(let d): handleWSData(d)
                 case .string(let s): handleWSData(Data(s.utf8))
                 @unknown default: break
                 }
             } catch {
-                if wsTask === task {
-                    // Reconnect after a short delay if we're still meant to be connected.
-                    try? await Task.sleep(nanoseconds: 1_500_000_000)
-                    if wsTask === task, connected { openWebSocket() }
+                if wsTask === task, connected {
+                    // Reconnect with exponential backoff (1.5s → 30s cap) while
+                    // we're still meant to be connected; restores updates when
+                    // the backend comes back.
+                    try? await Task.sleep(nanoseconds: UInt64(wsReconnectDelay * 1_000_000_000))
+                    wsReconnectDelay = min(wsReconnectDelay * 2, 30)
+                    if wsTask === task, connected {
+                        openWebSocket()
+                        await refreshPlaying()
+                    }
                 }
                 return
             }
@@ -237,6 +381,11 @@ final class BackendClient: ObservableObject {
         switch env.type {
         case "playing":
             if let s = env.state { playing = s }
+        case "disconnected":
+            // Backend detected the Apple TV connection died (network drop,
+            // TV reboot). Reflect it; refreshAndReconnect() can recover.
+            connected = false
+            connectedDevice = nil
         case "keyboard":
             keyboard = KeyboardEvent(
                 focused: env.focused ?? false,
@@ -287,4 +436,22 @@ struct AnyEncodable: Encodable {
     let _encode: (Encoder) throws -> Void
     init<T: Encodable>(_ value: T) { _encode = value.encode(to:) }
     func encode(to encoder: Encoder) throws { try _encode(encoder) }
+}
+
+extension String {
+    /// Decode a hex string into UTF-8 text (pyatv credentials hex-encode the
+    /// device UUID). Returns nil on malformed input.
+    init?(hexEncoded hex: String) {
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(hex.count / 2)
+        var idx = hex.startIndex
+        while idx < hex.endIndex {
+            let next = hex.index(idx, offsetBy: 2, limitedBy: hex.endIndex) ?? hex.endIndex
+            guard let byte = UInt8(hex[idx..<next], radix: 16) else { return nil }
+            bytes.append(byte)
+            idx = next
+        }
+        guard let s = String(bytes: bytes, encoding: .utf8) else { return nil }
+        self = s
+    }
 }

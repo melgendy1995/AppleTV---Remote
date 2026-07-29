@@ -6,13 +6,16 @@ struct DevicePickerView: View {
     @State private var scanning = false
     @State private var confirmUnpairFor: DeviceInfo?
     @State private var connectingTo: String?
+    @State private var manualHost: String = ""
+    @State private var addingHost: Bool = false
+    @State private var manualHostError: String?
 
     let onPair: (DeviceInfo) -> Void
 
     var body: some View {
         NavigationStack {
             ZStack {
-                Theme.bg.ignoresSafeArea()
+                Rectangle().fill(.ultraThinMaterial).ignoresSafeArea()
                 ScrollView {
                     VStack(spacing: 10) {
                         if scanning && client.devices.isEmpty {
@@ -32,6 +35,9 @@ struct DevicePickerView: View {
                             .font(.system(size: 12))
                             .foregroundColor(Theme.muted)
                             .padding(.top, 8)
+
+                        manualHostSection
+                            .padding(.top, 12)
                     }
                     .padding(16)
                 }
@@ -46,7 +52,12 @@ struct DevicePickerView: View {
                 }
             }
         }
-        .task { scan() }
+        .task {
+            // Show paired devices from saved credentials immediately; the
+            // background scan refines the list when it finishes.
+            client.seedDevicesFromSaved()
+            scan()
+        }
         .preferredColorScheme(.dark)
         .confirmationDialog(
             "Unpair \(confirmUnpairFor?.name ?? "")?",
@@ -107,9 +118,7 @@ struct DevicePickerView: View {
             .font(.system(size: 12, weight: .semibold))
             .foregroundColor(device.isPaired ? .white : Theme.text)
             .padding(.horizontal, 12).padding(.vertical, 7)
-            .background(device.isPaired ? Theme.accent : Theme.surface)
-            .overlay(Capsule().stroke(device.isPaired ? Theme.accent : Theme.border, lineWidth: 1))
-            .clipShape(Capsule())
+            .glassCapsule(tint: device.isPaired ? Theme.accent : nil)
             .buttonStyle(.plain)
             .disabled(connectingTo != nil)
 
@@ -131,17 +140,79 @@ struct DevicePickerView: View {
             }
         }
         .padding(12)
-        .background(Theme.surface2)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.border, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .glassCard(cornerRadius: 12)
+    }
+
+    @ViewBuilder
+    private var manualHostSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Not seeing your Apple TV?")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(Theme.muted)
+            Text("Discovery can miss devices when a VPN captures the multicast route or the Apple TV is on a different subnet. Add it by IP or `.local` hostname.")
+                .font(.system(size: 11))
+                .foregroundColor(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                TextField("192.168.1.42 or apple-tv.local", text: $manualHost)
+                    .textFieldStyle(.roundedBorder)
+                    .disableAutocorrection(true)
+                    .onSubmit { addByHost() }
+                Button {
+                    addByHost()
+                } label: {
+                    Group {
+                        if addingHost {
+                            ProgressView().progressViewStyle(.circular).controlSize(.small).tint(.white)
+                        } else {
+                            Text("Add")
+                        }
+                    }
+                    .frame(minWidth: 44)
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .glassCapsule(tint: Theme.accent)
+                .buttonStyle(.plain)
+                .disabled(addingHost || manualHost.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            if let err = manualHostError {
+                Text(err)
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.danger)
+            }
+        }
+        .padding(12)
+        .glassCard(cornerRadius: 12)
+    }
+
+    private func addByHost() {
+        let host = manualHost.trimmingCharacters(in: .whitespaces)
+        guard !host.isEmpty, !addingHost else { return }
+        manualHostError = nil
+        addingHost = true
+        Task {
+            do {
+                let found = try await client.addDeviceByHost(host)
+                if found.isEmpty {
+                    manualHostError = "No Apple TV found at \(host)."
+                } else {
+                    manualHost = ""
+                }
+            } catch {
+                manualHostError = error.localizedDescription
+            }
+            addingHost = false
+        }
     }
 
     private func scan() {
         scanning = true
         Task {
-            await client.scan()
+            // 5s is plenty on a healthy LAN and keeps the picker responsive;
+            // the main app flows still use the default 12s scan.
+            await client.scan(timeout: 5)
             scanning = false
         }
     }

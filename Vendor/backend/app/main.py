@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
@@ -34,12 +33,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Apple TV Remote", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# No CORS middleware: the only client is the native macOS app (not a browser),
+# and allow_origins=["*"] would let any website drive the user's Apple TV.
 
 
 @app.get("/api/status")
@@ -52,8 +47,21 @@ async def status() -> dict[str, Any]:
 
 
 @app.get("/api/devices", response_model=list[DeviceInfo])
-async def scan_devices(timeout: int = 5) -> list[DeviceInfo]:
+async def scan_devices(timeout: int = 12) -> list[DeviceInfo]:
+    if not 1 <= timeout <= 30:
+        raise HTTPException(status_code=400, detail="timeout must be between 1 and 30 seconds")
     return await manager.scan(timeout=timeout)
+
+
+@app.post("/api/devices/by-host", response_model=list[DeviceInfo])
+async def scan_by_host(body: dict[str, Any]) -> list[DeviceInfo]:
+    host = (body or {}).get("host", "").strip()
+    if not host:
+        raise HTTPException(status_code=400, detail="host required")
+    try:
+        return await manager.scan_host(host)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/api/devices/saved")
@@ -173,13 +181,22 @@ async def get_artwork() -> Response:
 @app.websocket("/ws/state")
 async def state_socket(ws: WebSocket) -> None:
     await ws.accept()
-    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    # Bounded queue: a stuck client drops updates instead of growing memory
+    # without limit.
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=100)
 
     async def push(state: dict[str, Any]) -> None:
-        await queue.put(state)
+        try:
+            queue.put_nowait(state)
+        except asyncio.QueueFull:
+            pass
 
     manager.subscribe(push)
 
+    # Awaiting only queue.get() would never notice a dead client; race it
+    # against ws.receive() so disconnects (clean or abrupt) are detected.
+    recv_task = asyncio.create_task(ws.receive())
+    get_task = asyncio.create_task(queue.get())
     try:
         if manager.connected:
             try:
@@ -199,11 +216,22 @@ async def state_socket(ws: WebSocket) -> None:
                 log.warning("initial keyboard state error: %s", e)
 
         while True:
-            payload = await queue.get()
-            await ws.send_text(json.dumps(payload))
-    except WebSocketDisconnect:
+            done, _ = await asyncio.wait(
+                {recv_task, get_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if recv_task in done:
+                # Raises WebSocketDisconnect on close, RuntimeError on an
+                # abrupt drop (starlette) — both caught below.
+                recv_task.result()
+                recv_task = asyncio.create_task(ws.receive())
+            if get_task in done:
+                await ws.send_text(json.dumps(get_task.result()))
+                get_task = asyncio.create_task(queue.get())
+    except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
+        recv_task.cancel()
+        get_task.cancel()
         manager.unsubscribe(push)
 
 

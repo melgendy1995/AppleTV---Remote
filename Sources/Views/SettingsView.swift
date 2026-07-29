@@ -12,7 +12,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Theme.bg.ignoresSafeArea()
+                Rectangle().fill(.ultraThinMaterial).ignoresSafeArea()
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Backend URL")
                         .font(.system(size: 12))
@@ -21,9 +21,7 @@ struct SettingsView: View {
                         .disableAutocorrection(true)
                         .font(.system(size: 15).monospaced())
                         .padding(12)
-                        .background(Theme.surface2)
-                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border, lineWidth: 1))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .glassCard(cornerRadius: 10)
 
                     Text("Examples: `http://localhost:8000`, `http://192.168.1.20:8000`. Use the LAN IP of the machine running the FastAPI backend.")
                         .font(.system(size: 12))

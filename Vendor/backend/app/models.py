@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 from pydantic import BaseModel
 
 
@@ -30,4 +28,3 @@ class PlayingState(BaseModel):
 class CommandResponse(BaseModel):
     ok: bool
     error: str | None = None
-    detail: Any | None = None

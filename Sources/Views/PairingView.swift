@@ -17,7 +17,7 @@ struct PairingView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Theme.bg.ignoresSafeArea()
+                Rectangle().fill(.ultraThinMaterial).ignoresSafeArea()
                 VStack(alignment: .leading, spacing: 14) {
                     Text(status)
                         .font(.system(size: 13))
@@ -43,9 +43,7 @@ struct PairingView: View {
                             .font(.system(size: 20).monospacedDigit())
                             .multilineTextAlignment(.center)
                             .padding(12)
-                            .background(Theme.surface2)
-                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border, lineWidth: 1))
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .glassCard(cornerRadius: 10)
                             .onSubmit { submit() }
                     }
                     progressChips
@@ -55,9 +53,7 @@ struct PairingView: View {
                             .foregroundColor(Theme.danger)
                             .padding(10)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Theme.danger.opacity(0.12))
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.danger.opacity(0.35), lineWidth: 1))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .glassCard(cornerRadius: 8, tint: Theme.danger)
                     }
                     Spacer()
                     HStack(spacing: 8) {
@@ -178,7 +174,7 @@ struct PairingView: View {
     }
 
     private func connectAfterPair() {
-        guard let identifier = session?.identifier ?? session?.identifier else { dismiss(); return }
+        let identifier = session?.identifier ?? device.identifier
         let connectDevice = DeviceInfo(identifier: identifier, name: session?.name ?? device.name,
                                        address: device.address, model: device.model,
                                        services: device.services, isPaired: true)

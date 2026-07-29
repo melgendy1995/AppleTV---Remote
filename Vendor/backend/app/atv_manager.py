@@ -2,12 +2,18 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 from typing import Any, Callable
 
 import pyatv
 from pyatv.const import OperatingSystem, Protocol
-from pyatv.interface import AppleTV, KeyboardListener, PushListener
+from pyatv.interface import (
+    AppleTV,
+    DeviceListener,
+    KeyboardListener,
+    PushListener,
+)
 
 from . import storage
 from .models import DeviceInfo, PlayingState
@@ -32,7 +38,7 @@ class _Listener(PushListener):
         self.manager = manager
 
     def playstatus_update(self, updater, playstatus) -> None:
-        asyncio.create_task(self.manager._broadcast_playing())
+        self.manager._spawn(self.manager._broadcast_playing())
 
     def playstatus_error(self, updater, exception) -> None:
         log.warning("push update error: %s", exception)
@@ -43,7 +49,23 @@ class _KeyboardListener(KeyboardListener):
         self.manager = manager
 
     def focusstate_update(self, old_state, new_state) -> None:
-        asyncio.create_task(self.manager._broadcast_keyboard(new_state))
+        self.manager._spawn(self.manager._broadcast_keyboard(new_state))
+
+
+class _DeviceListener(DeviceListener):
+    """Detects a dead connection (network drop, TV reboot). Without this the
+    manager keeps reporting connected=true on a corpse connection and nothing
+    ever recovers."""
+
+    def __init__(self, manager: "ATVManager"):
+        self.manager = manager
+
+    def connection_lost(self, exception: Exception) -> None:
+        self.manager._spawn(self.manager._handle_connection_lost(exception))
+
+    def connection_closed(self) -> None:
+        # Intentional close (our own disconnect) — nothing to do.
+        pass
 
 
 class ATVManager:
@@ -54,11 +76,20 @@ class ATVManager:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._listeners: set[Callable[[dict[str, Any]], Any]] = set()
         self._listener_impl: _Listener | None = None
+        self._device_listener: _DeviceListener | None = None
         self._kbd_listener: _KeyboardListener | None = None
         self._kbd_poll_task: asyncio.Task | None = None
         self._kbd_last_focus: str | None = None
         self._kbd_last_text: str | None = None
         self._lock = asyncio.Lock()
+        # Strong refs to fire-and-forget tasks so the GC can't collect them
+        # mid-run (which would silently drop state broadcasts).
+        self._tasks: set[asyncio.Task] = set()
+
+    def _spawn(self, coro) -> None:
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     @property
     def connected(self) -> bool:
@@ -68,9 +99,36 @@ class ATVManager:
     def current_identifier(self) -> str | None:
         return self._identifier
 
-    async def scan(self, timeout: int = 5) -> list[DeviceInfo]:
+    async def scan(self, timeout: int = 12) -> list[DeviceInfo]:
         loop = asyncio.get_running_loop()
         configs = await pyatv.scan(loop, timeout=timeout)
+        return self._configs_to_devices(configs)
+
+    async def scan_host(self, host: str, timeout: int = 8) -> list[DeviceInfo]:
+        """Unicast scan a single host. Bypasses mDNS multicast, which is
+        unreliable on networks with VPN tunnels capturing the 224.0.0.0/4
+        route (Tailscale, etc.) or across subnet boundaries.
+
+        pyatv's ``hosts=`` parameter only accepts IPv4 literals, so resolve
+        hostnames (incl. ``.local`` via mDNS A-record lookup) first.
+        """
+        import socket
+        try:
+            ipaddress.IPv4Address(host)
+            ip = host
+        except (ValueError, ipaddress.AddressValueError):
+            try:
+                ip = await asyncio.get_running_loop().getaddrinfo(
+                    host, None, family=socket.AF_INET
+                )
+                ip = ip[0][4][0]
+            except socket.gaierror as e:
+                raise RuntimeError(f"Could not resolve '{host}': {e}") from e
+        loop = asyncio.get_running_loop()
+        configs = await pyatv.scan(loop, hosts=[ip], timeout=timeout)
+        return self._configs_to_devices(configs)
+
+    def _configs_to_devices(self, configs) -> list[DeviceInfo]:
         saved = storage.load_all()
         devices: list[DeviceInfo] = []
         for cfg in configs:
@@ -116,6 +174,8 @@ class ATVManager:
             atv = await pyatv.connect(config, loop)
             try:
                 listener = _Listener(self)
+                device_listener = _DeviceListener(self)
+                atv.listener = device_listener
                 try:
                     atv.push_updater.listener = listener
                     atv.push_updater.start()
@@ -146,6 +206,7 @@ class ATVManager:
                 self._device_info = info
                 self._loop = loop
                 self._listener_impl = listener
+                self._device_listener = device_listener
                 self._kbd_listener = kbd_listener
 
                 # Fallback: poll focus state because not every protocol pushes
@@ -189,7 +250,18 @@ class ATVManager:
         self._identifier = None
         self._device_info = None
         self._listener_impl = None
+        self._device_listener = None
         self._kbd_listener = None
+
+    async def _handle_connection_lost(self, exception: BaseException) -> None:
+        """Tear down a connection pyatv reported as lost (network drop, TV
+        reboot) and tell WS subscribers so clients can offer recovery."""
+        log.warning("connection lost: %s", exception)
+        async with self._lock:
+            if self._atv is None:
+                return  # already torn down (duplicate callback or manual disconnect)
+            await self._disconnect_locked()
+        await self._emit({"type": "disconnected"})
 
     async def send(self, command: str, **kwargs: Any) -> None:
         if self._atv is None:
@@ -223,25 +295,37 @@ class ATVManager:
         raise RuntimeError(f"Unknown command: {command}")
 
     async def get_playing(self) -> PlayingState:
-        if self._atv is None:
+        # Capture the refs under the lock: a concurrent disconnect() could
+        # otherwise clear self._atv between the check and the dereference.
+        async with self._lock:
+            atv = self._atv
+            identifier = self._identifier
+        if atv is None:
             return PlayingState()
 
-        playing = await self._atv.metadata.playing()
+        try:
+            playing = await asyncio.wait_for(atv.metadata.playing(), timeout=5)
+        except Exception as e:
+            # Dead connection (e.g. network dropped): tear it down so status
+            # stops lying and the client can reconnect, then report idle.
+            log.warning("playing() failed (%s) — treating as connection loss", e)
+            await self._handle_connection_lost(e)
+            return PlayingState()
         state = PlayingState(
             device_state=playing.device_state.name if playing.device_state else None,
             media_type=playing.media_type.name if playing.media_type else None,
             title=playing.title,
             artist=playing.artist,
             album=playing.album,
-            app=self._atv.metadata.app.name if self._atv.metadata.app else None,
+            app=atv.metadata.app.name if atv.metadata.app else None,
             position=playing.position,
             total_time=playing.total_time,
         )
         try:
-            state.volume = await self._atv.audio.volume
+            state.volume = await atv.audio.volume
         except Exception:
             pass
-        if self._identifier:
+        if identifier:
             state.artwork_url = f"/api/artwork?ts={playing.hash}"
         return state
 
@@ -336,6 +420,10 @@ class ATVManager:
                 tick += 1
                 if self._atv is None:
                     return
+                if not self._listeners:
+                    # Nobody subscribed — don't RPC the TV every 0.6s for
+                    # nothing. State is re-synced on the next real poll.
+                    continue
                 text: str | None = None
                 try:
                     text = await asyncio.wait_for(

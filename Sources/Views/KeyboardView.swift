@@ -3,7 +3,6 @@ import SwiftUI
 struct KeyboardView: View {
     @EnvironmentObject private var client: BackendClient
     @Environment(\.dismiss) private var dismiss
-    @Binding var autoOpened: Bool
 
     @State private var text: String = ""
     @State private var hint: String = "Type below — text appears on the Apple TV as you type."
@@ -15,7 +14,7 @@ struct KeyboardView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Theme.bg.ignoresSafeArea()
+                Rectangle().fill(.ultraThinMaterial).ignoresSafeArea()
                 VStack(alignment: .leading, spacing: 14) {
                     Text(hint)
                         .font(.system(size: 13))
@@ -24,9 +23,7 @@ struct KeyboardView: View {
                         .disableAutocorrection(true)
                         .font(.system(size: 18))
                         .padding(12)
-                        .background(Theme.surface2)
-                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.border, lineWidth: 1))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .glassCard(cornerRadius: 10)
                         .focused($fieldFocused)
                         .onSubmit { submit() }
                         .onChange(of: text) { _, new in schedulePush(new) }
@@ -62,19 +59,24 @@ struct KeyboardView: View {
             // Sync field from TV side if not echoing our own writes.
             guard new.focused else { return }
             if Date() > suppressUntil, let t = new.text, t != lastSent {
+                // Remote-originated text: mark as lastSent so applying it to
+                // the field doesn't push it straight back to the TV.
+                lastSent = t
                 text = t
             }
         }
+        .onDisappear { sendTimer?.cancel() }
     }
 
     private func schedulePush(_ value: String) {
         sendTimer?.cancel()
         sendTimer = Task {
             try? await Task.sleep(nanoseconds: 120_000_000)
-            guard !Task.isCancelled else { return }
-            lastSent = value
+            guard !Task.isCancelled, value != lastSent else { return }
             suppressUntil = Date().addingTimeInterval(0.75)
-            await client.keyboardSet(value)
+            if await client.keyboardSet(value) {
+                lastSent = value
+            }
         }
     }
 

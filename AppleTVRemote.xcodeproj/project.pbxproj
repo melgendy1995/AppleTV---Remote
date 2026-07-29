@@ -19,7 +19,6 @@
 		8B6486231E82F2E8D6AACAB1 /* DevicePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CC966B427C45AB17F39E509 /* DevicePickerView.swift */; };
 		B09CCB95954494DA9904900F /* KeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5290226E2B7EB9F3E536D7DB /* KeyboardView.swift */; };
 		B263790F30E8BA5B5DDA9998 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 153A6DED0E5C0258649AE3FB /* Theme.swift */; };
-		B86F5C7125EBA6F941335A51 /* ScreenCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 473A97C438B00FC41403EDF0 /* ScreenCaptureView.swift */; };
 		D01A43E78A1AE605ABB1629D /* VideoRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC555105E385DBE39A3BF821 /* VideoRecorder.swift */; };
 		F718ECBDE723588278EA58C4 /* RemoteControlsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5E3D62E33164449BB8B5692 /* RemoteControlsView.swift */; };
 		F98D4D5D182357C97E217B2D /* NowPlayingCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8696576F2F249DF508C1A15 /* NowPlayingCard.swift */; };
@@ -30,7 +29,6 @@
 		0CC966B427C45AB17F39E509 /* DevicePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicePickerView.swift; sourceTree = "<group>"; };
 		153A6DED0E5C0258649AE3FB /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		3360AE8CBA0045C9C68B62AB /* CaptureCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureCoordinator.swift; sourceTree = "<group>"; };
-		473A97C438B00FC41403EDF0 /* ScreenCaptureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenCaptureView.swift; sourceTree = "<group>"; };
 		4D07F82488ACFFD2FDA8EABE /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		5290226E2B7EB9F3E536D7DB /* KeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardView.swift; sourceTree = "<group>"; };
 		7E7CD2B3813C2F4EA72CAD24 /* BackendController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendController.swift; sourceTree = "<group>"; };
@@ -83,7 +81,6 @@
 				E8696576F2F249DF508C1A15 /* NowPlayingCard.swift */,
 				84812F8ADF6CB8FC64A15C44 /* PairingView.swift */,
 				C5E3D62E33164449BB8B5692 /* RemoteControlsView.swift */,
-				473A97C438B00FC41403EDF0 /* ScreenCaptureView.swift */,
 				F6DF5CE186C83DA42B93E94A /* SettingsView.swift */,
 				153A6DED0E5C0258649AE3FB /* Theme.swift */,
 			);
@@ -203,7 +200,6 @@
 				F98D4D5D182357C97E217B2D /* NowPlayingCard.swift in Sources */,
 				FC20ECB5FE191C5B7E30DF1A /* PairingView.swift in Sources */,
 				F718ECBDE723588278EA58C4 /* RemoteControlsView.swift in Sources */,
-				B86F5C7125EBA6F941335A51 /* ScreenCaptureView.swift in Sources */,
 				01ED369074EEF82DFA621843 /* SettingsView.swift in Sources */,
 				B263790F30E8BA5B5DDA9998 /* Theme.swift in Sources */,
 				D01A43E78A1AE605ABB1629D /* VideoRecorder.swift in Sources */,

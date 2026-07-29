@@ -1,5 +1,8 @@
 import SwiftUI
 
+/// The remote buttons. Keyboard shortcuts are NOT attached to these buttons:
+/// they are handled by a window-level key monitor in AppDelegate so they keep
+/// working while this sidebar is hidden (and never fire during text editing).
 struct RemoteControlsView: View {
     @EnvironmentObject private var client: BackendClient
 
@@ -19,24 +22,23 @@ struct RemoteControlsView: View {
             let size = min(geo.size.width, 280)
             ZStack {
                 Circle()
-                    .fill(Theme.surface)
-                    .overlay(Circle().stroke(Theme.border, lineWidth: 1))
+                    .fill(.clear)
+                    .glassCircle(interactive: false)
                 VStack(spacing: 0) {
-                    dpadButton("▲", command: "up", shortcut: .upArrow)
+                    dpadButton("▲", command: "up")
                     HStack(spacing: 0) {
-                        dpadButton("◀", command: "left", shortcut: .leftArrow)
+                        dpadButton("◀", command: "left")
                         Button { send("select") } label: {
                             Circle()
-                                .fill(Theme.surface2)
-                                .overlay(Circle().stroke(Theme.border, lineWidth: 1))
+                                .fill(.clear)
                                 .overlay(Text("●").foregroundColor(Theme.muted).font(.system(size: 14)))
                                 .frame(width: size * 0.30, height: size * 0.30)
+                                .glassCircle()
                         }
                         .buttonStyle(.plain)
-                        .keyboardShortcut(.return, modifiers: [])
-                        dpadButton("▶", command: "right", shortcut: .rightArrow)
+                        dpadButton("▶", command: "right")
                     }
-                    dpadButton("▼", command: "down", shortcut: .downArrow)
+                    dpadButton("▼", command: "down")
                 }
                 .frame(width: size, height: size)
             }
@@ -47,7 +49,7 @@ struct RemoteControlsView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private func dpadButton(_ label: String, command: String, shortcut: KeyEquivalent? = nil) -> some View {
+    private func dpadButton(_ label: String, command: String) -> some View {
         Button { send(command) } label: {
             Text(label)
                 .font(.system(size: 22))
@@ -56,7 +58,6 @@ struct RemoteControlsView: View {
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
-        .modifier(OptionalKeyboardShortcut(key: shortcut))
     }
 
     // MARK: - Rows
@@ -66,20 +67,16 @@ struct RemoteControlsView: View {
             Text("↩ Menu")
         }
         .buttonStyle(SurfaceButton(prominent: true))
-        .keyboardShortcut(.escape, modifiers: [])
     }
 
     private var transportRow: some View {
         HStack(spacing: 8) {
             Button { send("previous") } label: { Text("⏮") }
                 .buttonStyle(SurfaceButton())
-                .keyboardShortcut("p", modifiers: [])
             Button { send("play_pause") } label: { Text("⏯") }
                 .buttonStyle(PrimaryButton())
-                .keyboardShortcut(.space, modifiers: [])
             Button { send("next") } label: { Text("⏭") }
                 .buttonStyle(SurfaceButton())
-                .keyboardShortcut("n", modifiers: [])
         }
     }
 
@@ -87,7 +84,6 @@ struct RemoteControlsView: View {
         HStack(spacing: 8) {
             Button { send("home") } label: { Text("⌂ TV") }
                 .buttonStyle(SurfaceButton())
-                .keyboardShortcut("h", modifiers: [])
             Button { send("home_hold") } label: { Text("⌂⌂") }
                 .buttonStyle(SurfaceButton())
         }
@@ -95,17 +91,5 @@ struct RemoteControlsView: View {
 
     private func send(_ command: String) {
         Task { await client.sendCommand(command) }
-    }
-}
-
-/// Applies a SwiftUI `.keyboardShortcut` only when a key is provided.
-private struct OptionalKeyboardShortcut: ViewModifier {
-    let key: KeyEquivalent?
-    func body(content: Content) -> some View {
-        if let k = key {
-            content.keyboardShortcut(k, modifiers: [])
-        } else {
-            content
-        }
     }
 }

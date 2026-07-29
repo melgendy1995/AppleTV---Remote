@@ -22,8 +22,6 @@ final class BackendController: ObservableObject {
     private var process: Process?
     private var stderrPipe: Pipe?
 
-    private let baseURL: URL? = nil
-
     /// Embedded backend URL once running; nil otherwise.
     var embeddedURL: URL? {
         if case let .running(port) = state {
@@ -47,6 +45,8 @@ final class BackendController: ObservableObject {
     }
 
     func start() async {
+        // Re-entrancy guard: a Retry double-tap must not spawn extra uvicorns.
+        guard state != .starting, !(process?.isRunning ?? false) else { return }
         state = .starting
         guard let pythonURL = Bundle.main.url(forResource: "python/bin/python3", withExtension: nil, subdirectory: "Vendor"),
               let backendDir = Bundle.main.url(forResource: "backend", withExtension: nil, subdirectory: "Vendor") else {
@@ -142,7 +142,14 @@ final class BackendController: ObservableObject {
             }
         }
         process = nil
-        if state != .external { state = .idle }
+        // Keep a .failed state so the user sees the error + Retry button;
+        // teardown after a failed start() must not erase it.
+        if state != .external, !isFailed { state = .idle }
+    }
+
+    private var isFailed: Bool {
+        if case .failed = state { return true }
+        return false
     }
 
     // MARK: - Port discovery

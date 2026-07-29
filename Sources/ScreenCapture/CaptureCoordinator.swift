@@ -14,7 +14,7 @@ import SwiftUI
 @MainActor
 final class CaptureCoordinator: NSObject, ObservableObject {
 
-    // MARK: - Published state (consumed by ScreenCaptureView)
+    // MARK: - Published state (consumed by ContentView)
 
     @Published private(set) var permissionGranted: Bool = false
     @Published private(set) var previewImage: NSImage?
@@ -22,6 +22,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     @Published private(set) var isStreaming: Bool = false
     @Published private(set) var isRecording: Bool = false
     @Published private(set) var recordingElapsed: TimeInterval = 0
+    @Published private(set) var recordingFileSize: UInt64 = 0
     @Published private(set) var lastCaptureURL: URL?
     @Published private(set) var lastError: String?
 
@@ -34,17 +35,11 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     // MARK: - Internals
 
     private let sampleQueue = DispatchQueue(label: "capture.samples", qos: .userInitiated)
-    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
     private var stream: SCStream?
     private var streamOutput: StreamOutputAdapter?
     private var recorder: VideoRecorder?
     private var recordingTimer: Timer?
     private var recordingStartedAt: Date?
-
-    /// Previews only need ~10fps to look live. Full stream fps still feeds the
-    /// recorder — we just throttle the CGImage conversion that drives SwiftUI.
-    private let previewInterval: TimeInterval = 0.1
-    private var lastPreviewUpdate: Date = .distantPast
 
     // MARK: - Lifecycle
 
@@ -111,7 +106,10 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         do {
             let dir = try CaptureStorage.captureDirectory()
             let url = dir.appendingPathComponent(CaptureStorage.filename(kind: "screenshot", ext: "png"))
-            try writePNG(pixelBuffer: pixelBuffer, to: url)
+            // PNG encode + CI render off the main actor.
+            try await Task.detached(priority: .userInitiated) {
+                try Self.writePNG(pixelBuffer: pixelBuffer, to: url)
+            }.value
             lastCaptureURL = url
             return url
         } catch {
@@ -135,9 +133,13 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             self.recorder = recorder
             streamOutput?.recorder = recorder
             isRecording = true
-            recordingStartedAt = Date()
             recordingElapsed = 0
+            recordingFileSize = 0
             startRecordingTimer()
+            // Must be set AFTER startRecordingTimer(): that helper calls
+            // stopRecordingTimer() first, which clears recordingStartedAt —
+            // setting it before left the elapsed timer stuck at 0.
+            recordingStartedAt = Date()
         } catch {
             lastError = "Recording start failed: \(error.localizedDescription)"
         }
@@ -192,6 +194,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     private func stopStream() async {
         isStreaming = false
         previewImage = nil
+        if isRecording { _ = await stopRecording() }
         if let stream {
             try? await stream.stopCapture()
         }
@@ -215,15 +218,11 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         return candidates.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
     }
 
-    // MARK: - Preview / frame handling (called from adapter)
+    // MARK: - Preview (called from adapter)
 
-    fileprivate func handlePreviewFrame(_ pixelBuffer: CVPixelBuffer) {
-        let now = Date()
-        guard now.timeIntervalSince(lastPreviewUpdate) >= previewInterval else { return }
-        lastPreviewUpdate = now
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        guard let cg = ciContext.createCGImage(ciImage, from: ciImage.extent) else { return }
-        previewImage = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+    /// Publishes a preview frame rendered off the main actor by the adapter.
+    fileprivate func setPreviewImage(_ image: NSImage?) {
+        previewImage = image
     }
 
     // MARK: - Recording timer
@@ -234,6 +233,11 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             Task { @MainActor in
                 guard let self, let start = self.recordingStartedAt else { return }
                 self.recordingElapsed = Date().timeIntervalSince(start)
+                if let url = self.recorder?.outputURL,
+                   let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+                   let size = (attrs[.size] as? NSNumber)?.uint64Value {
+                    self.recordingFileSize = size
+                }
             }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -248,9 +252,11 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 
     // MARK: - PNG encoding
 
-    private func writePNG(pixelBuffer: CVPixelBuffer, to url: URL) throws {
+    private static nonisolated func writePNG(pixelBuffer: CVPixelBuffer, to url: URL) throws {
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        guard let cg = ciContext.createCGImage(ciImage, from: ciImage.extent) else {
+        // One-shot context — this runs on a background thread (Task.detached).
+        guard let cg = CIContext(options: [.useSoftwareRenderer: false])
+            .createCGImage(ciImage, from: ciImage.extent) else {
             throw NSError(domain: "CaptureCoordinator", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Failed to render frame"])
         }
@@ -268,9 +274,12 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 extension CaptureCoordinator: SCStreamDelegate {
     nonisolated func stream(_ stream: SCStream, didStopWithError error: Error) {
         Task { @MainActor [weak self] in
-            self?.isStreaming = false
-            self?.previewImage = nil
-            self?.lastError = "Stream stopped: \(error.localizedDescription)"
+            guard let self else { return }
+            // Don't let a recording dangle after the stream dies.
+            if self.isRecording { _ = await self.stopRecording() }
+            self.isStreaming = false
+            self.previewImage = nil
+            self.lastError = "Stream stopped: \(error.localizedDescription)"
         }
     }
 }
@@ -282,10 +291,24 @@ extension CaptureCoordinator: SCStreamDelegate {
 /// buffer for the screenshot path so we don't accumulate memory.
 private final class StreamOutputAdapter: NSObject, SCStreamOutput {
     weak var owner: CaptureCoordinator?
-    var recorder: VideoRecorder?
     private(set) var currentPixelSize: CGSize
     private var latestPixelBuffer: CVPixelBuffer?
     private let lock = NSLock()
+
+    /// Written on the main actor, read on the sample queue — guarded by `lock`.
+    private var _recorder: VideoRecorder?
+    var recorder: VideoRecorder? {
+        get { lock.lock(); defer { lock.unlock() }; return _recorder }
+        set { lock.lock(); _recorder = newValue; lock.unlock() }
+    }
+
+    // Preview throttling/coalescing: ~10fps is enough for the UI; frames are
+    // dropped while a render is in flight so we never spawn one Task per frame.
+    private let previewInterval: TimeInterval = 0.1
+    private var lastPreviewUpdate: Date = .distantPast
+    private var previewRenderInFlight = false
+    private let previewRenderQueue = DispatchQueue(label: "capture.preview", qos: .userInitiated)
+    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
     init(owner: CaptureCoordinator, pixelSize: CGSize) {
         self.owner = owner
@@ -313,8 +336,31 @@ private final class StreamOutputAdapter: NSObject, SCStreamOutput {
 
         recorder?.append(sampleBuffer: sampleBuffer)
 
-        Task { @MainActor [weak owner] in
-            owner?.handlePreviewFrame(pixelBuffer)
+        // Throttle + coalesce previews: skip if too soon or a render is in flight.
+        lock.lock()
+        let now = Date()
+        let due = now.timeIntervalSince(lastPreviewUpdate) >= previewInterval && !previewRenderInFlight
+        if due {
+            lastPreviewUpdate = now
+            previewRenderInFlight = true
+        }
+        lock.unlock()
+        guard due else { return }
+
+        // Render off the main actor; only the finished NSImage hops over.
+        previewRenderQueue.async { [weak self, weak owner] in
+            guard let self else { return }
+            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+            var image: NSImage?
+            if let cg = self.ciContext.createCGImage(ciImage, from: ciImage.extent) {
+                image = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+            }
+            Task { @MainActor in
+                owner?.setPreviewImage(image)
+                self.lock.lock()
+                self.previewRenderInFlight = false
+                self.lock.unlock()
+            }
         }
     }
 }

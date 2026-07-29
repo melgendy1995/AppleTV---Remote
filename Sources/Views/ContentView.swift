@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var showKeyboard = false
     @State private var keyboardAutoOpened = false
     @State private var pairingDevice: DeviceInfo?
+    @State private var sidebarHidden = false
     @State private var savedURL: URL?
     @State private var savedKind: String = ""
     @State private var capturePollTask: Task<Void, Never>?
@@ -21,15 +22,31 @@ struct ContentView: View {
             HStack(spacing: 0) {
                 stage
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                Divider().overlay(Theme.border)
-                sidebar
-                    .frame(width: 340)
+                if !sidebarHidden {
+                    Divider().overlay(Theme.border)
+                    sidebar
+                        .frame(width: 340)
+                        .transition(.move(edge: .trailing))
+                }
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            // Floating way back when the remote is hidden (fullscreen mode).
+            if sidebarHidden {
+                Button { setRemoteHidden(false) } label: { Text("«") }
+                    .buttonStyle(IconButton())
+                    .help("Show remote")
+                    .padding(16)
             }
         }
         .preferredColorScheme(.dark)
         .onAppear { startCapturePolling() }
         .onDisappear { stopCapturePolling() }
         .onChange(of: client.keyboard) { _, new in handleKeyboardChange(new) }
+        // When another sheet blocked the auto-open, retry once it dismisses.
+        .onChange(of: showDevicePicker) { _, shown in if !shown { retryKeyboardAutoOpen() } }
+        .onChange(of: showSettings) { _, shown in if !shown { retryKeyboardAutoOpen() } }
+        .onChange(of: pairingDevice) { _, device in if device == nil { retryKeyboardAutoOpen() } }
         .onReceive(NotificationCenter.default.publisher(for: .openSettings)) { _ in
             showSettings = true
         }
@@ -45,7 +62,7 @@ struct ContentView: View {
                 .environmentObject(client)
         }
         .sheet(isPresented: $showKeyboard) {
-            KeyboardView(autoOpened: $keyboardAutoOpened)
+            KeyboardView()
                 .environmentObject(client)
         }
         .sheet(item: $pairingDevice) { device in
@@ -121,13 +138,12 @@ struct ContentView: View {
                     HStack(spacing: 6) {
                         Circle().fill(Theme.danger).frame(width: 10, height: 10)
                             .shadow(color: Theme.danger.opacity(0.7), radius: 4)
-                        Text(formatElapsed(capture.recordingElapsed))
+                        Text("\(formatElapsed(capture.recordingElapsed)) · \(formatBytes(capture.recordingFileSize))")
                             .font(.system(size: 13, weight: .semibold, design: .monospaced))
                             .foregroundColor(.white)
                     }
                     .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(Color.black.opacity(0.55))
-                    .clipShape(Capsule())
+                    .glassCapsule(interactive: false)
                 }
                 Spacer()
             }
@@ -159,6 +175,8 @@ struct ContentView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
+        .frame(maxHeight: .infinity)
+        .background(.ultraThinMaterial)
     }
 
     private var topbar: some View {
@@ -184,14 +202,26 @@ struct ContentView: View {
                 .help("Keyboard")
                 .disabled(!client.connected)
 
-            Button { Task { await client.refreshPlaying(); await client.scan() } } label: { Text("↻") }
+            Button { Task { await client.refreshAndReconnect() } } label: { Text("↻") }
                 .buttonStyle(IconButton())
-                .help("Rescan")
+                .help("Refresh / reconnect")
 
             Button { showSettings = true } label: { Text("⚙") }
                 .buttonStyle(IconButton())
                 .help("Settings")
+
+            Button { setRemoteHidden(true) } label: { Text("»") }
+                .buttonStyle(IconButton())
+                .help("Hide remote")
         }
+    }
+
+    /// Collapse the remote sidebar so the capture stream fills the whole
+    /// window. Deliberately does NOT enter real fullscreen: fullscreen moves
+    /// the app to its own Space, which occludes the QuickTime window being
+    /// captured and freezes the stream.
+    private func setRemoteHidden(_ hidden: Bool) {
+        withAnimation(.easeInOut(duration: 0.25)) { sidebarHidden = hidden }
     }
 
     private var captureActions: some View {
@@ -205,6 +235,7 @@ struct ContentView: View {
             }
             .buttonStyle(SurfaceButton())
             .disabled(!capture.isStreaming)
+            .help("Screenshot (S)")
 
             Button {
                 Task {
@@ -219,6 +250,7 @@ struct ContentView: View {
             }
             .buttonStyle(capture.isRecording ? AnyButtonStyle(DangerButton()) : AnyButtonStyle(PrimaryButton()))
             .disabled(!capture.isStreaming)
+            .help("Toggle recording (R)")
         }
     }
 
@@ -234,12 +266,7 @@ struct ContentView: View {
                 .buttonStyle(.plain)
         }
         .padding(10)
-        .background(Theme.danger.opacity(0.12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Theme.danger.opacity(0.35), lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .glassCard(cornerRadius: 10, tint: Theme.danger)
     }
 
     private func savedToast(url: URL) -> some View {
@@ -256,8 +283,7 @@ struct ContentView: View {
                 .foregroundColor(Theme.accent)
         }
         .padding(10)
-        .background(Theme.good.opacity(0.15))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .glassCard(cornerRadius: 10, tint: Theme.good)
     }
 
     // MARK: - Helpers
@@ -291,9 +317,26 @@ struct ContentView: View {
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
     }
 
+    private func formatBytes(_ bytes: UInt64) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+
+    /// True while any sheet other than the keyboard is up — SwiftUI silently
+    /// drops a second .sheet presentation, so auto-open must wait.
+    private var anySheetPresented: Bool {
+        showDevicePicker || showSettings || pairingDevice != nil
+    }
+
+    private func retryKeyboardAutoOpen() {
+        if client.keyboard.focused, !showKeyboard, !anySheetPresented {
+            keyboardAutoOpened = true
+            showKeyboard = true
+        }
+    }
+
     private func handleKeyboardChange(_ kb: KeyboardEvent) {
         if kb.focused {
-            if !showKeyboard {
+            if !showKeyboard && !anySheetPresented {
                 keyboardAutoOpened = true
                 showKeyboard = true
             }
@@ -312,9 +355,8 @@ private struct DangerButton: ButtonStyle {
             .font(.system(size: 15, weight: .semibold))
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
-            .background(Theme.danger.opacity(configuration.isPressed ? 0.7 : 1.0))
             .foregroundColor(.white)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .glassButton(tint: Theme.danger, isPressed: configuration.isPressed)
     }
 }
 

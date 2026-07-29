@@ -92,31 +92,49 @@ class PairingManager:
             if handler is None or proto is None:
                 raise RuntimeError("Session is not awaiting a PIN.")
 
-            paired_ok = False
-            err: str | None = None
+        # finish() can hang on an unresponsive TV — cap it, and don't hold the
+        # lock across the wait so cancel() still works.
+        creds: str | None = None
+        err: str | None = None
+        try:
+            handler.pin(pin)
+            await asyncio.wait_for(handler.finish(), timeout=30)
+            if handler.has_paired:
+                creds = handler.service.credentials
+            else:
+                err = f"{proto.name} pairing did not complete."
+        except asyncio.TimeoutError:
+            err = f"{proto.name} pairing timed out."
+            log.warning("pair %s timed out", proto.name)
+        except Exception as e:
+            err = f"{proto.name} pairing failed: {e}"
+            log.warning("pair %s error: %s", proto.name, e)
+        finally:
             try:
-                handler.pin(pin)
-                await handler.finish()
-                if handler.has_paired:
-                    creds = handler.service.credentials
-                    storage.save_protocol(session.identifier, session.name, proto.name, creds)
-                    session.completed.append(proto.name)
-                    paired_ok = True
-                else:
-                    err = f"{proto.name} pairing did not complete."
-            except Exception as e:
-                err = f"{proto.name} pairing failed: {e}"
-                log.warning("pair %s error: %s", proto.name, e)
-            finally:
+                await handler.close()
+            except Exception:
+                pass
+
+        async with self._lock:
+            if self._sessions.get(session_id) is not session:
+                raise RuntimeError("Pairing session was cancelled.")
+            session.current_handler = None
+            session.current_protocol = None
+
+            if creds is not None:
+                storage.save_protocol(session.identifier, session.name, proto.name, creds)
+                session.completed.append(proto.name)
+            else:
+                # Wrong PIN (or other failure): report an error and leave the
+                # protocol pairable so the user can retry, instead of silently
+                # skipping it and returning a success-shaped response.
+                session.failed.append({"protocol": proto.name, "error": err or "unknown error"})
+                session.pending.insert(0, proto)
                 try:
-                    await handler.close()
+                    await self._begin_next(session)
                 except Exception:
                     pass
-                session.current_handler = None
-                session.current_protocol = None
-
-            if not paired_ok and err:
-                session.failed.append({"protocol": proto.name, "error": err})
+                raise RuntimeError(err or f"{proto.name} pairing failed.")
 
             if session.pending:
                 return await self._begin_next(session)
