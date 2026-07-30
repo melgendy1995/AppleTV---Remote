@@ -7,7 +7,7 @@ import logging
 from typing import Any, Callable
 
 import pyatv
-from pyatv.const import OperatingSystem, Protocol
+from pyatv.const import InputAction, OperatingSystem, Protocol
 from pyatv.interface import (
     AppleTV,
     DeviceListener,
@@ -30,6 +30,13 @@ SIMPLE_COMMANDS = {
     "skip_forward", "skip_backward",
     "screensaver", "suspend",
     "turn_on", "turn_off",
+}
+
+# Button presses with an InputAction: long-press select, double-press TV
+# (tvOS app switcher). Mapped to (method name, action).
+ACTION_COMMANDS = {
+    "select_hold": ("select", InputAction.Hold),
+    "home_double": ("home", InputAction.DoubleTap),
 }
 
 
@@ -273,6 +280,14 @@ class ATVManager:
             if method is None:
                 raise RuntimeError(f"Command '{command}' not supported by this device.")
             await method()
+            return
+
+        if command in ACTION_COMMANDS:
+            method_name, action = ACTION_COMMANDS[command]
+            method = getattr(rc, method_name, None)
+            if method is None:
+                raise RuntimeError(f"Command '{command}' not supported by this device.")
+            await method(action=action)
             return
 
         if command == "set_volume":

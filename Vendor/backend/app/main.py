@@ -13,7 +13,7 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 from . import storage
-from .atv_manager import SIMPLE_COMMANDS, manager
+from .atv_manager import ACTION_COMMANDS, SIMPLE_COMMANDS, manager
 from .models import CommandResponse, DeviceInfo, PlayingState
 from .pairing import pair_manager
 
@@ -42,7 +42,7 @@ async def status() -> dict[str, Any]:
     return {
         "connected": manager.connected,
         "identifier": manager.current_identifier,
-        "supported_commands": sorted(SIMPLE_COMMANDS) + ["set_volume", "set_position", "channel_up", "channel_down"],
+        "supported_commands": sorted(SIMPLE_COMMANDS) + sorted(ACTION_COMMANDS) + ["set_volume", "set_position", "channel_up", "channel_down"],
     }
 
 
