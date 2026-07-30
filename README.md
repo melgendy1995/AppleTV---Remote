@@ -29,17 +29,20 @@ swift-app/
 ├── Info-macOS.plist
 ├── Entitlements-macOS.plist          # network client + outgoing connections
 ├── Sources/
-│   ├── AppleTVRemoteApp.swift        # @main, scene, backend boot + Cmd+, Settings
+│   ├── AppleTVRemoteApp.swift        # @main, scene, backend boot, window-level key monitor
 │   ├── Models/Models.swift           # DeviceInfo, PlayingState, KeyboardEvent, pairing DTOs
 │   ├── Networking/
 │   │   ├── BackendClient.swift       # REST + WebSocket client (@MainActor ObservableObject)
 │   │   └── BackendController.swift   # spawns/monitors the bundled Python backend
+│   ├── ScreenCapture/
+│   │   ├── CaptureCoordinator.swift  # ScreenCaptureKit pipeline: preview, screenshot, recording
+│   │   └── VideoRecorder.swift       # AVAssetWriter wrapper for MP4 recordings
 │   └── Views/
-│       ├── Theme.swift               # dark palette + button styles
-│       ├── ContentView.swift         # root view + sheets (devices, pair, keyboard, settings)
+│       ├── Theme.swift               # black palette + liquid-glass helpers + button styles
+│       ├── ContentView.swift         # cinema layout: capture stage + collapsible control sidebar
 │       ├── NowPlayingCard.swift      # live now-playing card
 │       ├── RemoteControlsView.swift  # D-pad, menu, transport, system buttons
-│       ├── DevicePickerView.swift    # discovered + saved devices
+│       ├── DevicePickerView.swift    # discovered network devices
 │       ├── PairingView.swift         # session-based PIN pairing flow
 │       ├── KeyboardView.swift        # auto-opens when a TV text field is focused
 │       └── SettingsView.swift        # editable backend URL + test connection
@@ -99,14 +102,25 @@ Then set the backend URL from the gear icon in the app. Default is
 
 ## Features
 
-- **Device discovery** — scans the LAN for Apple TVs and merges in saved devices.
+- **Liquid glass UI** — native macOS 26 `.glassEffect` (material fallback on older
+  systems) over a true-black theme.
+- **Device discovery + auto-connect** — scans the LAN and automatically connects
+  to the first paired Apple TV it finds; recovers after network drops via the ↻ button.
 - **In-app pairing** — session-based PIN flow that walks each pairable protocol
   (AirPlay, Companion, MRP, RAOP) and saves credentials per protocol.
 - **Connect / disconnect / forget** saved devices.
-- **Remote controls** — D-pad (up/down/left/right/select), Menu, Home (+ hold),
-  play/pause/stop, next/previous, skip, volume, screensaver, Control Center.
+- **Remote controls** — D-pad (up/down/left/right/select), Menu, Home (+ hold,
+  double-click = app switcher), long-press select, play/pause/stop, next/previous,
+  skip, volume, screensaver, Control Center.
+- **Keyboard shortcuts** — arrows, return, space, esc, p/n/h; handled by a
+  window-level key monitor so they work even with the remote sidebar hidden.
+- **Hideable remote** — `»` collapses the sidebar so the capture stream fills the
+  window; `«` restores it.
+- **Screen capture** — live preview of the Apple TV via QuickTime + ScreenCaptureKit,
+  with screenshots (`S`) and MP4 recording (`R`, live timer + file size); saved files
+  are revealed in Finder. Files land in `~/Downloads/AppleTV Captures/`.
 - **Live now-playing** — title/artist/album/app, position, volume, and artwork,
-  streamed over a WebSocket (`/ws/state`) with auto-reconnect.
+  streamed over a WebSocket (`/ws/state`) with exponential-backoff reconnect.
 - **Keyboard** — a modal pops automatically when a tvOS text field is focused;
   supports set / append / clear and pushes text to the TV. Focus is detected via
   a `text_get()` poll because pyatv's cached focus state can go stale.
