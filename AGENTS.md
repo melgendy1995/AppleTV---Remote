@@ -100,3 +100,7 @@ project.pbxproj). The app is not notarized; INSTALL.md tells users to strip quar
   (`recordingStartedAt` must be set *after* `startRecordingTimer()`) + live file size.
 - v0.2.1: `select_hold` (long-press ●, 0.6s) and `home_double` (double-click ⌂ TV → tvOS app
   switcher) via pyatv `InputAction`, with UI debounce/guard flags.
+- v0.2.2: keyboard hold-Return → `select_hold`, double-`h` → `home_double` (keyDown/keyUp
+  tracking in the AppDelegate monitor); picker shows ✓ Connected for the active device;
+  Rescan clears the list + shows a loader; ↻ refresh reconnects to the LAST connected device
+  before falling back to scan, and auto-connect prefers it too.
