@@ -40,9 +40,17 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .onAppear { startCapturePolling() }
+        .onAppear {
+            startCapturePolling()
+            capture.setActiveDevice(name: client.connectedDevice?.name)
+        }
         .onDisappear { stopCapturePolling() }
         .onChange(of: client.keyboard) { _, new in handleKeyboardChange(new) }
+        // The screen follows the selected Apple TV: connecting (or switching)
+        // a device retargets the QuickTime source automatically.
+        .onChange(of: client.connectedDevice) { _, device in
+            capture.setActiveDevice(name: device?.name)
+        }
         // When another sheet blocked the auto-open, retry once it dismisses.
         .onChange(of: showDevicePicker) { _, shown in if !shown { retryKeyboardAutoOpen() } }
         .onChange(of: showSettings) { _, shown in if !shown { retryKeyboardAutoOpen() } }
@@ -109,19 +117,21 @@ struct ContentView: View {
                 .buttonStyle(SurfaceButton())
                 .frame(width: 180)
             } else if capture.quicktimeWindow == nil {
-                Text("Waiting for QuickTime")
+                Text("Waiting for the Apple TV screen")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(Theme.text)
-                Text("Open QuickTime → File → New Movie Recording → pick your Apple TV. The live preview will appear here.")
+                Text(client.connected
+                     ? "QuickTime is being opened and pointed at \(client.connectedDevice?.name ?? "your Apple TV") automatically…"
+                     : "Connect to an Apple TV (⋮ menu) and its screen will appear here automatically.")
                     .font(.system(size: 12))
                     .foregroundColor(Theme.muted)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 380)
-                Button("Open QuickTime") {
+                Button("Open QuickTime Manually") {
                     NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/QuickTime Player.app"))
                 }
                 .buttonStyle(SurfaceButton())
-                .frame(width: 180)
+                .frame(width: 200)
             } else {
                 ProgressView().controlSize(.small).tint(Theme.muted)
                 Text("Connecting to \(capture.quicktimeWindow?.title ?? "QuickTime")…")
@@ -202,9 +212,12 @@ struct ContentView: View {
                 .help("Keyboard")
                 .disabled(!client.connected)
 
-            Button { Task { await client.refreshAndReconnect() } } label: { Text("↻") }
+            Button { Task {
+                await client.refreshAndReconnect()
+                await capture.refreshAndRecover()
+            } } label: { Text("↻") }
                 .buttonStyle(IconButton())
-                .help("Refresh / reconnect")
+                .help("Refresh connections and screen")
 
             Button { showSettings = true } label: { Text("⚙") }
                 .buttonStyle(IconButton())

@@ -2,6 +2,7 @@ import AVFoundation
 import CoreGraphics
 import CoreImage
 import Foundation
+import OSLog
 import ScreenCaptureKit
 import SwiftUI
 
@@ -25,6 +26,11 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     @Published private(set) var recordingFileSize: UInt64 = 0
     @Published private(set) var lastCaptureURL: URL?
     @Published private(set) var lastError: String?
+    /// Name of the Apple TV the app is connected to. When set, the
+    /// coordinator owns the QuickTime lifecycle: it opens the Movie
+    /// Recording window, selects this device as the source, and restarts
+    /// QuickTime when the feed errors out.
+    @Published private(set) var activeDeviceName: String?
 
     struct DetectedWindow: Equatable {
         let windowID: CGWindowID
@@ -40,6 +46,33 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     private var recorder: VideoRecorder?
     private var recordingTimer: Timer?
     private var recordingStartedAt: Date?
+
+    // MARK: - QuickTime automation state
+
+    private let qt = QuickTimeController()
+    static let log = Logger(subsystem: "app.appletvremote", category: "capture")
+    /// Source we last selected in QuickTime's menu — avoids reopening the
+    /// menu (visible flicker) when it's already right.
+    private var lastSelectedSource: String?
+    /// After a sourceNotFound, wait this long before re-reading the menu.
+    private var nextSourceAttempt = Date.distantPast
+    /// Consecutive QuickTime restarts; capped at 2, then the coordinator
+    /// gives up until the device changes or the user hits refresh. Reset on
+    /// the first healthy frame.
+    private var recoveryAttempts = 0
+    private var gaveUp = false
+    /// Consecutive polls reporting the recording window missing — opening
+    /// QuickTime only happens after 2 confirmations, so a transient AX
+    /// hiccup never triggers a close/reopen cycle.
+    private var windowMissingPolls = 0
+    /// Consecutive openMovieRecording failures — capped at 2, then give up
+    /// (WITHOUT quitting QuickTime; a launch-in-progress AX hiccup is not a
+    /// reason to close the user's window).
+    private var openFailures = 0
+    /// When the current stream started — frames must arrive within a grace
+    /// period or the attempt counts as failed (static screens legitimately
+    /// produce no NEW frames, so staleness after the first frame is fine).
+    private var streamStartedAt: Date?
 
     // MARK: - Lifecycle
 
@@ -66,7 +99,54 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     /// Find the best QuickTime window that looks like an Apple TV capture and
     /// start streaming from it. No-op if already streaming from the right one.
     func startIfPossible() async {
-        guard permissionGranted else { return }
+        guard permissionGranted else {
+            Self.log.info("poll: screen-capture permission missing")
+            return
+        }
+        if let deviceName = activeDeviceName, !deviceName.isEmpty {
+            await startManaged(deviceName: deviceName)
+        } else {
+            Self.log.info("poll: unmanaged (no active device)")
+            await startUnmanaged()
+        }
+    }
+
+    /// Last state summary logged — poll logs only on CHANGE to stay quiet
+    /// in steady state while still explaining what it's (not) doing.
+    private var lastPollNote = ""
+
+    fileprivate func pollNote(_ note: String) {
+        guard note != lastPollNote else { return }
+        lastPollNote = note
+        Self.log.info("poll: \(note, privacy: .public)")
+    }
+
+    /// Called when the backend connection changes: the screen must follow
+    /// the selected Apple TV. Resets recovery state so a device switch gets
+    /// a fresh set of attempts.
+    func setActiveDevice(name: String?) {
+        guard name != activeDeviceName else { return }
+        activeDeviceName = name
+        lastSelectedSource = nil
+        nextSourceAttempt = .distantPast
+        recoveryAttempts = 0
+        openFailures = 0
+        gaveUp = false
+        Task { await startIfPossible() }
+    }
+
+    /// Refresh-button action: resets the give-up flag and re-checks the
+    /// feed; the managed flow reopens/restarts only what's actually broken.
+    func refreshAndRecover() async {
+        recoveryAttempts = 0
+        openFailures = 0
+        gaveUp = false
+        await startIfPossible()
+    }
+
+    /// Legacy behavior when no device is connected: capture whatever
+    /// QuickTime window exists (manual QuickTime usage still works).
+    private func startUnmanaged() async {
         do {
             guard let window = try await findQuickTimeCaptureWindow() else {
                 quicktimeWindow = nil
@@ -76,6 +156,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             if let current = quicktimeWindow,
                current.windowID == window.windowID,
                isStreaming { return }
+            Self.log.info("unmanaged: starting stream for window \(window.windowID)")
             quicktimeWindow = DetectedWindow(
                 windowID: window.windowID,
                 title: window.title ?? "QuickTime",
@@ -86,6 +167,117 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             lastError = "Capture setup failed: \(error.localizedDescription)"
             await stopStream()
         }
+    }
+
+    /// Connected-device flow: the app owns QuickTime. Opens the Movie
+    /// Recording window, selects the connected Apple TV as the source, and
+    /// restarts QuickTime when the feed errors or never delivers frames.
+    private func startManaged(deviceName: String) async {
+        if gaveUp { return }
+        do {
+            // Already healthy? Leave QuickTime completely alone.
+            if isStreaming, (streamOutput?.frameCount ?? 0) > 0 {
+                pollNote("healthy")
+                recoveryAttempts = 0
+                if lastError != nil { lastError = nil }
+                return
+            }
+            if qt.hasErrorDialog() {
+                await recoverQuickTime(reason: "QuickTime reported an error")
+                return
+            }
+            // Probe before acting: AX hiccups (`.unknown`) must not trigger
+            // open/close; only a window confirmed missing twice does.
+            switch qt.probeRecordingWindow() {
+            case .unknown:
+                pollNote("QuickTime probe failed (AX busy) — waiting")
+                return
+            case .present:
+                windowMissingPolls = 0
+                openFailures = 0
+            case .missing:
+                pollNote("recording window missing (\(self.windowMissingPolls + 1))")
+                windowMissingPolls += 1
+                guard windowMissingPolls >= 2 else { return }
+                windowMissingPolls = 0
+                Self.log.info("opening QuickTime movie recording for \(deviceName, privacy: .public)")
+                do {
+                    try await qt.openMovieRecording()
+                    openFailures = 0
+                } catch {
+                    // Opening can fail while QuickTime is still launching —
+                    // DON'T quit it (that's the open/close churn). Count
+                    // failures and give up after 2, leaving QuickTime alone.
+                    openFailures += 1
+                    Self.log.error("open failed (\(self.openFailures)/2): \(error.localizedDescription, privacy: .public)")
+                    if openFailures >= 2 {
+                        gaveUp = true
+                        lastError = "Couldn't open the Apple TV screen (\(error.localizedDescription)). Press ↻ to try again."
+                    } else {
+                        lastError = "Opening QuickTime failed — retrying…"
+                    }
+                    return
+                }
+            }
+            guard let window = try await findQuickTimeCaptureWindow() else {
+                Self.log.info("no QuickTime capture window yet")
+                quicktimeWindow = nil
+                await stopStream()
+                return
+            }
+            // Check what's currently selected (the menu reports the
+            // checkmark) and only press anything when it's the wrong device.
+            if lastSelectedSource != deviceName, Date() >= nextSourceAttempt {
+                nextSourceAttempt = Date().addingTimeInterval(30)
+                do {
+                    try await qt.selectScreenSource(named: deviceName)
+                    Self.log.info("selected source \(deviceName, privacy: .public)")
+                    lastSelectedSource = deviceName
+                } catch QuickTimeController.QuickTimeError.sourceNotFound {
+                    // TV not in the menu (asleep/off-network) — retry after
+                    // the cooldown, but never bounce QuickTime for this.
+                    Self.log.info("source \(deviceName, privacy: .public) not in QuickTime menu yet")
+                    lastError = QuickTimeController.QuickTimeError.sourceNotFound(deviceName).errorDescription
+                }
+            }
+            if !(quicktimeWindow?.windowID == window.windowID && isStreaming) {
+                quicktimeWindow = DetectedWindow(
+                    windowID: window.windowID,
+                    title: window.title ?? "QuickTime",
+                    pixelSize: CGSize(width: window.frame.width, height: window.frame.height)
+                )
+                Self.log.info("starting stream for window \(window.windowID)")
+                try await startStream(for: window)
+            }
+            // Health: a fresh stream must deliver a first frame within 15s.
+            // After that, no new frames just means a static screen.
+            if isStreaming, let started = streamStartedAt,
+               Date().timeIntervalSince(started) > 15,
+               (streamOutput?.frameCount ?? 0) == 0 {
+                await recoverQuickTime(reason: "no video from QuickTime")
+                return
+            }
+        } catch {
+            Self.log.error("managed capture failed: \(error.localizedDescription, privacy: .public)")
+            lastError = error.localizedDescription
+            await stopStream()
+        }
+    }
+
+    /// Recovery: close QuickTime and let the next poll reopen it — but only
+    /// 2 attempts per device/refresh, then stop and wait for the user.
+    private func recoverQuickTime(reason: String) async {
+        recoveryAttempts += 1
+        Self.log.info("recovering QuickTime (attempt \(self.recoveryAttempts)/2): \(reason, privacy: .public)")
+        lastSelectedSource = nil
+        if recoveryAttempts >= 2 {
+            gaveUp = true
+            lastError = "Couldn't get the Apple TV screen (\(reason)). Press ↻ to try again."
+        } else {
+            lastError = "Restarting QuickTime (\(reason))…"
+        }
+        qt.quit()
+        await stopStream()
     }
 
     func stop() async {
@@ -188,12 +380,14 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 
         self.stream = stream
         self.streamOutput = output
+        self.streamStartedAt = Date()
         self.isStreaming = true
     }
 
     private func stopStream() async {
         isStreaming = false
         previewImage = nil
+        streamStartedAt = nil
         if isRecording { _ = await stopRecording() }
         if let stream {
             try? await stream.stopCapture()
@@ -205,7 +399,9 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     // MARK: - Discovery
 
     /// The QuickTime "Movie Recording" window is the largest window owned by
-    /// QuickTime Player that isn't a toolbar or inspector. We pick by area.
+    /// QuickTime Player that isn't a toolbar or inspector. We prefer a window
+    /// actually titled "Movie Recording" (so a stray movie-playback window
+    /// isn't grabbed), then fall back to the largest plausible candidate.
     private func findQuickTimeCaptureWindow() async throws -> SCWindow? {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         let qtWindows = content.windows.filter { w in
@@ -215,6 +411,9 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         // Prefer sensibly-sized recording windows (16:9 area heuristic)
         // over floating palettes/inspectors that QuickTime spawns.
         let candidates = qtWindows.filter { $0.frame.width >= 320 && $0.frame.height >= 180 }
+        if let recording = candidates.first(where: { $0.title == "Movie Recording" }) {
+            return recording
+        }
         return candidates.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
     }
 
@@ -321,6 +520,15 @@ private final class StreamOutputAdapter: NSObject, SCStreamOutput {
         return latestPixelBuffer
     }
 
+    /// Total complete frames received since this adapter was created (i.e.
+    /// since the current stream started). Zero after a grace period means the
+    /// capture attempt failed — a static screen later on is NOT a failure.
+    var frameCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return _frameCount
+    }
+    private var _frameCount = 0
+
     func stream(_ stream: SCStream,
                 didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
                 of type: SCStreamOutputType) {
@@ -332,7 +540,7 @@ private final class StreamOutputAdapter: NSObject, SCStreamOutput {
               status == .complete else { return }
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-        lock.lock(); latestPixelBuffer = pixelBuffer; lock.unlock()
+        lock.lock(); latestPixelBuffer = pixelBuffer; _frameCount += 1; lock.unlock()
 
         recorder?.append(sampleBuffer: sampleBuffer)
 

@@ -16,6 +16,7 @@
 		583331DD72F78CDB22E16D5D /* BackendClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1722738B6B84E7FF556E3DF /* BackendClient.swift */; };
 		6B9E196381E19F21CCCA475F /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D07F82488ACFFD2FDA8EABE /* ContentView.swift */; };
 		7E125DEE323FDBF313122582 /* CaptureCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3360AE8CBA0045C9C68B62AB /* CaptureCoordinator.swift */; };
+		AA11BB22CC33DD44EE55FF01 /* QuickTimeController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF02 /* QuickTimeController.swift */; };
 		8B6486231E82F2E8D6AACAB1 /* DevicePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CC966B427C45AB17F39E509 /* DevicePickerView.swift */; };
 		B09CCB95954494DA9904900F /* KeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5290226E2B7EB9F3E536D7DB /* KeyboardView.swift */; };
 		B263790F30E8BA5B5DDA9998 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 153A6DED0E5C0258649AE3FB /* Theme.swift */; };
@@ -29,6 +30,7 @@
 		0CC966B427C45AB17F39E509 /* DevicePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicePickerView.swift; sourceTree = "<group>"; };
 		153A6DED0E5C0258649AE3FB /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		3360AE8CBA0045C9C68B62AB /* CaptureCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureCoordinator.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD44EE55FF02 /* QuickTimeController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickTimeController.swift; sourceTree = "<group>"; };
 		4D07F82488ACFFD2FDA8EABE /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		5290226E2B7EB9F3E536D7DB /* KeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardView.swift; sourceTree = "<group>"; };
 		7E7CD2B3813C2F4EA72CAD24 /* BackendController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendController.swift; sourceTree = "<group>"; };
@@ -112,6 +114,7 @@
 			isa = PBXGroup;
 			children = (
 				3360AE8CBA0045C9C68B62AB /* CaptureCoordinator.swift */,
+				AA11BB22CC33DD44EE55FF02 /* QuickTimeController.swift */,
 				DC555105E385DBE39A3BF821 /* VideoRecorder.swift */,
 			);
 			path = ScreenCapture;
@@ -193,6 +196,7 @@
 				583331DD72F78CDB22E16D5D /* BackendClient.swift in Sources */,
 				0AD980E7330E2A2C93AEA22D /* BackendController.swift in Sources */,
 				7E125DEE323FDBF313122582 /* CaptureCoordinator.swift in Sources */,
+				AA11BB22CC33DD44EE55FF01 /* QuickTimeController.swift in Sources */,
 				6B9E196381E19F21CCCA475F /* ContentView.swift in Sources */,
 				8B6486231E82F2E8D6AACAB1 /* DevicePickerView.swift in Sources */,
 				B09CCB95954494DA9904900F /* KeyboardView.swift in Sources */,

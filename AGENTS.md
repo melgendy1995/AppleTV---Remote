@@ -10,7 +10,13 @@ app bundles (embedded Python 3.12 in `Vendor/python/`) and spawns automatically 
 
 It also mirrors the Apple TV's screen: ScreenCaptureKit captures the QuickTime Player
 "Movie Recording" window (the only public API path to wireless-Apple-TV frames) into a live
-preview, PNG screenshots, and MP4 recordings (`Sources/ScreenCapture/`).
+preview, PNG screenshots, and MP4 recordings (`Sources/ScreenCapture/`). QuickTime is
+driven automatically (`QuickTimeController.swift`): on connect the app opens the recording
+window and selects the connected TV via the accessibility tree (needs the Accessibility
+TCC grant — deliberately NOT Apple Events, whose consent prompt never appears for this
+self-signed app). QuickTime rejects AX while busy/launching (`kAXErrorCannotComplete`),
+so all state probes are three-state (present/missing/unknown) and recovery never quits
+QuickTime on a failed open; real restarts are capped at 2 per device/refresh.
 
 Repo root = this directory (`swift-app/`). Default branch: `main`. Releases are GitHub
 releases (`gh`), tags `vX.Y.Z`, zip asset `AppleTVRemote-X.Y.Z.zip` + `INSTALL.md`.
@@ -25,7 +31,9 @@ Sources/
 │   ├── BackendClient.swift     # @MainActor REST+WS client; auto-connect, dedupe, refresh/reconnect
 │   └── BackendController.swift # spawns bundled uvicorn on a free port; .failed state must persist
 ├── ScreenCapture/
-│   ├── CaptureCoordinator.swift# SCStream lifecycle, preview throttle, screenshot, recording
+│   ├── CaptureCoordinator.swift# SCStream lifecycle, preview throttle, screenshot, recording;
+│   │                           #  managed QuickTime flow (probe → open → select source → stream)
+│   ├── QuickTimeController.swift# AX-driven QuickTime automation (open/select source/health)
 │   └── VideoRecorder.swift     # AVAssetWriter wrapper (serial queue, @unchecked Sendable)
 └── Views/
     ├── Theme.swift             # black palette + liquid-glass helpers (glassCard/glassCapsule/…)
