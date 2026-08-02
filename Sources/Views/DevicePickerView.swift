@@ -48,7 +48,8 @@ struct DevicePickerView: View {
                     Button("Close") { dismiss() }
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button { scan() } label: { Text("Rescan") }
+                    Button { scan(clearing: true) } label: { Text("Rescan") }
+                        .disabled(scanning)
                 }
             }
         }
@@ -96,6 +97,12 @@ struct DevicePickerView: View {
                 .background(device.isPaired ? Theme.good.opacity(0.2) : Theme.border)
                 .foregroundColor(device.isPaired ? Theme.good : Theme.muted)
                 .clipShape(Capsule())
+            if client.isConnectedDevice(device) {
+                Text("✓ Connected")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Theme.good)
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+            } else {
             Button {
                 if device.isPaired {
                     connect(device)
@@ -121,6 +128,7 @@ struct DevicePickerView: View {
             .glassCapsule(tint: device.isPaired ? Theme.accent : nil)
             .buttonStyle(.plain)
             .disabled(connectingTo != nil)
+            }
 
             if device.isPaired {
                 Menu {
@@ -207,7 +215,10 @@ struct DevicePickerView: View {
         }
     }
 
-    private func scan() {
+    private func scan(clearing: Bool = false) {
+        // A manual rescan wipes the list first so the loader is visible and
+        // stale (possibly off-network) rows don't linger while scanning.
+        if clearing { client.devices = [] }
         scanning = true
         Task {
             // 5s is plenty on a healthy LAN and keeps the picker responsive;

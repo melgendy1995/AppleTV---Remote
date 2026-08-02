@@ -29,13 +29,23 @@ final class BackendClient: ObservableObject {
     private var autoConnectInFlight = false
     private var autoConnectCooldownUntil: Date?
 
+    /// True when this device-row represents the Apple TV we're currently
+    /// connected to. `connectedDevice` can be nil (a restored status only
+    /// yields an identifier), so fall back to the last-connected identifier.
+    func isConnectedDevice(_ device: DeviceInfo) -> Bool {
+        connected && device.identifier == (connectedDevice?.identifier ?? lastConnectedIdentifier)
+    }
+
     /// Connect automatically when a paired device shows up in scan results.
     /// Called after every scan; no-ops when already connected, suppressed by
     /// a manual disconnect, or cooling down after a failed attempt.
     private func autoConnectIfPossible() async {
         guard !connected, !autoConnectSuppressed, !autoConnectInFlight else { return }
         if let until = autoConnectCooldownUntil, Date() < until { return }
-        guard let device = devices.first(where: { $0.isPaired && !$0.address.isEmpty && $0.address != "not detected yet" }) else { return }
+        let candidates = devices.filter { $0.isPaired && !$0.address.isEmpty && $0.address != "not detected yet" }
+        // Prefer the device we were last connected to over whatever the
+        // scan happened to list first.
+        guard let device = candidates.first(where: { $0.identifier == lastConnectedIdentifier }) ?? candidates.first else { return }
         autoConnectInFlight = true
         defer { autoConnectInFlight = false }
         do {
@@ -87,7 +97,7 @@ final class BackendClient: ObservableObject {
 
     // MARK: - Top-level operations
 
-    func refreshStatus() async {
+    func refreshStatus(scanIfDisconnected: Bool = true) async {
         do {
             let s: StatusResponse = try await request("GET", "api/status")
             backendReachable = true
@@ -107,7 +117,7 @@ final class BackendClient: ObservableObject {
             } else {
                 connected = false
                 connectedDevice = nil
-                await scan()
+                if scanIfDisconnected { await scan() }
             }
         } catch {
             backendReachable = false
@@ -229,28 +239,37 @@ final class BackendClient: ObservableObject {
     }
 
     /// Refresh-button action: re-check backend status and, if the Apple TV
-    /// connection was lost (network drop etc.), re-establish it using the
-    /// saved credentials. Falls back to a device scan when reconnect isn't
-    /// possible (e.g. never connected, or credentials forgotten).
+    /// connection was lost (network drop/change etc.), re-establish it to the
+    /// LAST connected device using the saved credentials. Falls back to a
+    /// device scan when reconnect isn't possible (e.g. never connected, or
+    /// credentials forgotten).
     func refreshAndReconnect() async {
-        await refreshStatus()
+        await refreshStatus(scanIfDisconnected: false)
         if connected {
             // A dead connection is only detected server-side when an RPC
             // fails — poke it, then re-read the (possibly updated) status.
             await refreshPlaying()
-            await refreshStatus()
+            await refreshStatus(scanIfDisconnected: false)
         }
         if !connected {
+            // Try the last connected device first; a scan's auto-connect
+            // could otherwise latch onto a different paired Apple TV.
             await tryReconnect()
+        }
+        if !connected {
+            await scan()
         }
         if connected {
             await refreshPlaying()
         }
-        // else: refreshStatus's else-branch already ran a device scan.
     }
 
     private func tryReconnect() async {
-        guard let id = lastConnectedIdentifier, let entry = savedDevices[id] else { return }
+        guard let id = lastConnectedIdentifier else { return }
+        if savedDevices[id] == nil, let saved = try? await fetchSaved() {
+            savedDevices = saved
+        }
+        guard let entry = savedDevices[id] else { return }
         let device = DeviceInfo(identifier: id, name: entry.name, address: "",
                                 model: nil, services: Array(entry.credentials.keys), isPaired: true)
         do {
