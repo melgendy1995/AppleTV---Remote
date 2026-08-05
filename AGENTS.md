@@ -112,3 +112,8 @@ project.pbxproj). The app is not notarized; INSTALL.md tells users to strip quar
   tracking in the AppDelegate monitor); picker shows ✓ Connected for the active device;
   Rescan clears the list + shows a loader; ↻ refresh reconnects to the LAST connected device
   before falling back to scan, and auto-connect prefers it too.
+- v0.2.3: frozen-feed recovery (45s of frame silence while streaming → quit QuickTime, next
+  poll starts a fresh share session; tracked via `lastFrameAt` in the stream adapter); losing
+  the backend connection now closes QuickTime so reconnect gets a clean session; app window
+  re-focuses once per healthy connect (`didFocusOnConnect`, reset on stream stop); glass
+  buttons get explicit `contentShape` so their full padded area is clickable.
