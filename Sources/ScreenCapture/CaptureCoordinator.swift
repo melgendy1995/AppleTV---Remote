@@ -69,6 +69,10 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     /// (WITHOUT quitting QuickTime; a launch-in-progress AX hiccup is not a
     /// reason to close the user's window).
     private var openFailures = 0
+    /// Set once the app window has been brought to focus for the current
+    /// healthy feed; reset when the stream drops or the device changes so a
+    /// reconnect re-focuses.
+    private var didFocusOnConnect = false
     /// When the current stream started — frames must arrive within a grace
     /// period or the attempt counts as failed (static screens legitimately
     /// produce no NEW frames, so staleness after the first frame is fine).
@@ -124,15 +128,27 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     /// Called when the backend connection changes: the screen must follow
     /// the selected Apple TV. Resets recovery state so a device switch gets
     /// a fresh set of attempts.
+    /// Called when the backend connection changes: the screen must follow
+    /// the selected Apple TV. A transition to nil means the connection was
+    /// lost — close QuickTime so the reconnect gets a completely fresh
+    /// screen-share session instead of a stale one.
     func setActiveDevice(name: String?) {
         guard name != activeDeviceName else { return }
+        let wasConnected = activeDeviceName != nil
         activeDeviceName = name
         lastSelectedSource = nil
         nextSourceAttempt = .distantPast
         recoveryAttempts = 0
         openFailures = 0
         gaveUp = false
-        Task { await startIfPossible() }
+        if name == nil && wasConnected {
+            Self.log.info("connection lost — closing QuickTime")
+            qt.quit()
+            quicktimeWindow = nil
+            Task { await stopStream() }
+        } else {
+            Task { await startIfPossible() }
+        }
     }
 
     /// Refresh-button action: resets the give-up flag and re-checks the
@@ -180,6 +196,17 @@ final class CaptureCoordinator: NSObject, ObservableObject {
                 pollNote("healthy")
                 recoveryAttempts = 0
                 if lastError != nil { lastError = nil }
+                // The screen just came up — bring the remote forward so the
+                // user sees it (once per connect, not every poll).
+                if !didFocusOnConnect {
+                    didFocusOnConnect = true
+                    Self.log.info("screen connected — focusing app window")
+                    NSApp.activate(ignoringOtherApps: true)
+                    let win = NSApp.mainWindow ?? NSApp.windows.first
+                    win?.makeKeyAndOrderFront(nil)
+                    // Stays visible even if another app grabs focus right after.
+                    win?.orderFrontRegardless()
+                }
                 return
             }
             if qt.hasErrorDialog() {
@@ -255,6 +282,19 @@ final class CaptureCoordinator: NSObject, ObservableObject {
                Date().timeIntervalSince(started) > 15,
                (streamOutput?.frameCount ?? 0) == 0 {
                 await recoverQuickTime(reason: "no video from QuickTime")
+                return
+            }
+            // Freeze: the feed WAS delivering frames and then went silent
+            // for 45s (share session died, TV slept). Close QuickTime so the
+            // next poll opens a fresh session — a static-but-alive screen
+            // still emits frames from focus glow/screensaver, so 45s of
+            // total silence means the feed is dead.
+            if isStreaming, let lastFrame = streamOutput?.lastFrameAt,
+               Date().timeIntervalSince(lastFrame) > 45 {
+                Self.log.info("feed frozen — closing QuickTime for a fresh start")
+                lastSelectedSource = nil
+                qt.quit()
+                await stopStream()
                 return
             }
         } catch {
@@ -388,6 +428,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         isStreaming = false
         previewImage = nil
         streamStartedAt = nil
+        didFocusOnConnect = false
         if isRecording { _ = await stopRecording() }
         if let stream {
             try? await stream.stopCapture()
@@ -529,6 +570,15 @@ private final class StreamOutputAdapter: NSObject, SCStreamOutput {
     }
     private var _frameCount = 0
 
+    /// When the most recent complete frame arrived. A feed that delivered
+    /// frames and then goes silent for a long stretch is frozen (share
+    /// session died, TV slept) — the coordinator restarts QuickTime then.
+    var lastFrameAt: Date? {
+        lock.lock(); defer { lock.unlock() }
+        return _lastFrameAt
+    }
+    private var _lastFrameAt: Date?
+
     func stream(_ stream: SCStream,
                 didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
                 of type: SCStreamOutputType) {
@@ -540,7 +590,7 @@ private final class StreamOutputAdapter: NSObject, SCStreamOutput {
               status == .complete else { return }
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-        lock.lock(); latestPixelBuffer = pixelBuffer; _frameCount += 1; lock.unlock()
+        lock.lock(); latestPixelBuffer = pixelBuffer; _frameCount += 1; _lastFrameAt = Date(); lock.unlock()
 
         recorder?.append(sampleBuffer: sampleBuffer)
 

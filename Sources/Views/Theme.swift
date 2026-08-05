@@ -82,6 +82,7 @@ struct PrimaryButton: ButtonStyle {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
             .foregroundColor(.white)
+            .contentShape(Rectangle())
             .glassButton(tint: Theme.accent, isPressed: configuration.isPressed)
     }
 }
@@ -94,6 +95,7 @@ struct SurfaceButton: ButtonStyle {
             .frame(maxWidth: .infinity)
             .padding(.vertical, prominent ? 16 : 12)
             .foregroundColor(Theme.text)
+            .contentShape(Rectangle())
             .glassButton(isPressed: configuration.isPressed)
     }
 }
@@ -104,6 +106,7 @@ struct IconButton: ButtonStyle {
             .font(.system(size: 16, weight: .medium))
             .frame(width: 36, height: 36)
             .foregroundColor(Theme.text)
+            .contentShape(Rectangle())
             .glassButton(cornerRadius: 10, isPressed: configuration.isPressed)
     }
 }

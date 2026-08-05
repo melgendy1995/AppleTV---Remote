@@ -369,6 +369,7 @@ private struct DangerButton: ButtonStyle {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
             .foregroundColor(.white)
+            .contentShape(Rectangle())
             .glassButton(tint: Theme.danger, isPressed: configuration.isPressed)
     }
 }

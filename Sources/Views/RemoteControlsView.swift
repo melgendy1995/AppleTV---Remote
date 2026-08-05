@@ -44,6 +44,7 @@ struct RemoteControlsView: View {
                                 .glassCircle()
                         }
                         .buttonStyle(.plain)
+                        .contentShape(Circle())
                         .help("Select (long-press: hold)")
                         .simultaneousGesture(
                             LongPressGesture(minimumDuration: 0.6).onEnded { _ in
