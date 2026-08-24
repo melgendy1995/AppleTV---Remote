@@ -19,7 +19,10 @@ so all state probes are three-state (present/missing/unknown) and recovery never
 QuickTime on a failed open; real restarts are capped at 2 per device/refresh.
 
 Repo root = this directory (`swift-app/`). Default branch: `main`. Releases are GitHub
-releases (`gh`), tags `vX.Y.Z`, zip asset `AppleTVRemote-X.Y.Z.zip` + `INSTALL.md`.
+releases, tags `vX.Y.Z`, zip asset `AppleTVRemote-X.Y.Z.zip` + `INSTALL.md`.
+The `macOS app` GitHub Action (`.github/workflows/macos-app.yml`) builds that zip
+via `ship.sh` on `macos-26` and publishes it on tag push (or as an artifact from
+**Run workflow**).
 
 ## Layout (current)
 
@@ -56,17 +59,16 @@ Vendor/backend/app/             # main.py (FastAPI), atv_manager.py (pyatv), pai
 - Verify backend of a running app: find port via `ps aux | grep "[u]vicorn app.main"`,
   then `curl localhost:<port>/api/status`.
 
-## Release process (as done for v0.2.x)
+## Release process
 
 1. Bump `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in
    `AppleTVRemote.xcodeproj/project.pbxproj` (2 occurrences each); commit "Bump version to X".
-2. Release build (configuration Release) → zip:
-   `ditto -c -k --keepParent "<Release>/Apple TV Remote.app" AppleTVRemote-X.Y.Z.zip`
-3. `git tag vX.Y.Z && git push origin main --tags`
-4. `gh release create vX.Y.Z <zip> INSTALL.md --title … --notes …`
-   (reuse `INSTALL.md` from the previous release: `gh release download <prev> -p INSTALL.md`)
-5. Replace `/Applications/Apple TV Remote.app` with the new build (user runs it from there).
-6. `ship.sh` is the older alternative: ad-hoc-signed zip + generated INSTALL.md, no gh step.
+2. `git tag vX.Y.Z && git push origin main --tags`
+3. GitHub Action `macOS app` runs `./ship.sh` on `macos-26`, uploads the zip
+   artifact, and creates/updates the GitHub Release (`AppleTVRemote-X.Y.Z.zip` +
+   `INSTALL.md`). Manual share without a tag: Actions → **macOS app** → **Run workflow**.
+4. Replace `/Applications/Apple TV Remote.app` with the new build (user runs it from there).
+5. Local equivalent: `./ship.sh` (ad-hoc-signed zip in `build/dist/`).
 
 Code signing: local self-signed identity `AppleTVRemote-Dev`, `DEVELOPMENT_TEAM=""` (pinned in
 project.pbxproj). The app is not notarized; INSTALL.md tells users to strip quarantine.

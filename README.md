@@ -86,7 +86,21 @@ xcodebuild -project AppleTVRemote.xcodeproj -scheme AppleTVRemote-macOS \
 open "build/Build/Products/Debug/Apple TV Remote.app"
 ```
 
-### 3. Running the backend yourself (dev)
+### 3. Share a build with another Mac
+
+The app is unsigned, Apple silicon only. GitHub Actions runs `./ship.sh` and
+uploads `AppleTVRemote-*.zip` plus `INSTALL.md`.
+
+- **Anytime:** Actions → **macOS app** → **Run workflow**, then download the
+  `AppleTVRemote` artifact.
+- **Release:** bump the version in `project.pbxproj`, then
+  `git tag vX.Y.Z && git push origin vX.Y.Z`. The same workflow attaches the
+  zip to a GitHub Release.
+
+Recipients unzip, move the `.app`, and strip quarantine — see `INSTALL.md`.
+Local equivalent: `./ship.sh` (writes `build/dist/`).
+
+### 4. Running the backend yourself (dev)
 
 The app starts the bundled backend on its own. To run it manually — for a dev
 build without `Vendor/python` — install the deps and launch uvicorn:
