@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var testResult: String?
     @State private var testing = false
     @State private var error: String?
+    @AppStorage(CaptureCoordinator.previewFPSDefaultsKey) private var previewFPS = 30
 
     var body: some View {
         NavigationStack {
@@ -24,6 +25,19 @@ struct SettingsView: View {
                         .glassCard(cornerRadius: 10)
 
                     Text("Examples: `http://localhost:8000`, `http://192.168.1.20:8000`. Use the LAN IP of the machine running the FastAPI backend.")
+                        .font(.system(size: 12))
+                        .foregroundColor(Theme.muted)
+
+                    Text("Preview frame rate")
+                        .font(.system(size: 12))
+                        .foregroundColor(Theme.muted)
+                    Picker("Preview frame rate", selection: $previewFPS) {
+                        Text("30 fps").tag(30)
+                        Text("60 fps").tag(60)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    Text("Applies to the live preview and to recordings without reconnecting.")
                         .font(.system(size: 12))
                         .foregroundColor(Theme.muted)
 

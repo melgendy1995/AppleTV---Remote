@@ -5,8 +5,10 @@ import Foundation
 /// Wraps `AVAssetWriter` to turn a stream of `CMSampleBuffer` frames into
 /// an MP4 on disk. Callers push frames from any queue
 /// (the internal serial queue linearises appends and lifecycle transitions).
-/// Presentation timestamps may be variable — the capture device runs at its
-/// native rate, and the writer drops buffers it cannot accept in time.
+/// Presentation timestamps may be variable. The capture delegate keeps frames
+/// at the selected preview rate, and the writer drops buffers it cannot accept
+/// in time. Sample buffers are appended as captured (`420v`). There is no
+/// pixel-buffer adaptor and no BGRA conversion.
 final class VideoRecorder: @unchecked Sendable {
 
     private enum State { case ready, writing, finishing, finished }
@@ -19,7 +21,7 @@ final class VideoRecorder: @unchecked Sendable {
     private var lastAcceptedPTS: CMTime = .invalid
     let outputURL: URL
 
-    init(url: URL, pixelSize: CGSize) throws {
+    init(url: URL, pixelSize: CGSize, framesPerSecond: Int) throws {
         self.outputURL = url
         try? FileManager.default.removeItem(at: url)
 
@@ -36,8 +38,8 @@ final class VideoRecorder: @unchecked Sendable {
             AVVideoCompressionPropertiesKey: [
                 AVVideoAverageBitRateKey: bitrate,
                 AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
-                AVVideoExpectedSourceFrameRateKey: 30,
-                AVVideoMaxKeyFrameIntervalKey: 60,
+                AVVideoExpectedSourceFrameRateKey: framesPerSecond,
+                AVVideoMaxKeyFrameIntervalKey: framesPerSecond * 2,
             ],
         ]
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)

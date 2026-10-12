@@ -90,9 +90,12 @@ struct ContentView: View {
             } else {
                 stagePlaceholder
             }
-            recordingOverlay
+            // Only while recording. A full-size clear overlay would sit on the
+            // video for the whole session and force WindowServer to blend it.
+            if capture.isRecording {
+                recordingOverlay
+            }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .padding(12)
     }
 
@@ -376,19 +379,21 @@ private struct SampleBufferPreview: NSViewRepresentable {
 private final class SampleBufferHostView: NSView {
     private var adapter: StreamOutputAdapter?
 
+    override var isOpaque: Bool { true }
+
     func attach(_ adapter: StreamOutputAdapter?) {
         if self.adapter !== adapter {
             self.adapter?.attachPreviewLayer(nil)
             self.adapter = adapter
         }
         wantsLayer = true
+        clipsToBounds = false
         let display = (layer as? AVSampleBufferDisplayLayer) ?? AVSampleBufferDisplayLayer()
         if layer !== display {
-            display.videoGravity = .resizeAspect
-            display.backgroundColor = NSColor.black.cgColor
             layer = display
+            prepareDisplay(display)
         }
-        display.frame = bounds
+        syncGeometry(display)
         adapter?.attachPreviewLayer(display)
     }
 
@@ -400,7 +405,54 @@ private final class SampleBufferHostView: NSView {
 
     override func layout() {
         super.layout()
-        layer?.frame = bounds
+        if let display = layer as? AVSampleBufferDisplayLayer {
+            syncGeometry(display)
+        }
+        makeWindowOpaque()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        makeWindowOpaque()
+        if let display = layer as? AVSampleBufferDisplayLayer {
+            syncGeometry(display)
+        }
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        if let display = layer as? AVSampleBufferDisplayLayer {
+            syncGeometry(display)
+        }
+    }
+
+    /// No mask, shadow, or corner radius — those force an offscreen pass.
+    private func prepareDisplay(_ display: AVSampleBufferDisplayLayer) {
+        display.videoGravity = .resizeAspect
+        display.backgroundColor = NSColor.black.cgColor
+        display.isOpaque = true
+        display.cornerRadius = 0
+        display.masksToBounds = false
+        display.shadowOpacity = 0
+        syncGeometry(display)
+    }
+
+    /// Backing layer fills the view. `contentsScale` matches the window so
+    /// WindowServer does not rescale a 1x layer on a Retina backing store.
+    private func syncGeometry(_ display: AVSampleBufferDisplayLayer) {
+        display.frame = bounds
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        if display.contentsScale != scale {
+            display.contentsScale = scale
+        }
+    }
+
+    private func makeWindowOpaque() {
+        guard let window else { return }
+        let clear = window.backgroundColor == nil || window.backgroundColor == .clear
+        guard !window.isOpaque || clear else { return }
+        window.isOpaque = true
+        window.backgroundColor = .black
     }
 }
 

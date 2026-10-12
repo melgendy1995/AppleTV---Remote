@@ -12,15 +12,19 @@ It also mirrors the Apple TV's screen on the `feat/direct-feed` variant: at laun
 app sets CMIO `AllowScreenCaptureDevices` and `AllowWirelessScreenCaptureDevices`, then
 opens the Apple TV as an external `AVCaptureDevice` (localized name like "apple tv",
 modelID "iOS Device", muxed) with `AVCaptureSession` + `AVCaptureVideoDataOutput`
-(32BGRA). That feed drives the live preview, PNG screenshots, and MP4 recordings
+(420v, which the display layer composites directly — never 32BGRA). That feed drives the
+live preview, PNG screenshots, and MP4 recordings
 (`Sources/ScreenCapture/CaptureCoordinator.swift`). QuickTime is not launched.
 `QuickTimeController.swift` stays in the target but is not on the active path.
 The direct-feed app uses bundle ID `com.mahmoudelgendy.AppleTVRemoteDirect` so it can
 be installed beside the QuickTime-based build. Camera usage (not Screen Recording) is
-the TCC prompt. The session keeps the device's native frame rate (~60 fps);
-`VideoRecorder` timestamps frames and drops when the writer is busy. A hidden window
-stops preview enqueue and, unless recording, caps the device at 2 fps when that rate
-is supported, otherwise the sample delegate skips buffer work.
+the TCC prompt. The device keeps delivering ~60 fps (frame-duration setters throw).
+UserDefaults `previewFPS` (30 or 60, default 30) decimates in the sample delegate by
+presentation timestamp; recording gets those same kept frames, live, without
+rebuilding the session. `VideoRecorder` timestamps frames and drops when the writer
+is busy. A hidden window stops preview enqueue and, unless recording, the sample
+delegate skips buffer work down to about 2 fps. The preview layer is the view's
+backing layer: opaque window, `contentsScale` = backing scale, no stage corner radius.
 
 Repo root = this directory (`swift-app/`). Default branch: `main`. Releases are GitHub
 releases, tags `vX.Y.Z`, zip asset `AppleTVRemote-X.Y.Z.zip` + `INSTALL.md`.
@@ -94,9 +98,12 @@ project.pbxproj). The app is not notarized; INSTALL.md tells users to strip quar
 - **Auto-connect**: after every scan, connect to the first discovered paired device unless the
   user manually disconnected (suppress flag) or a previous attempt failed <60s ago.
 - **Capture**: preview enqueue and PNG encode stay off the main actor. The sample
-  adapter keeps the device's native rate; it does not coalesce to 10 fps. Hiding the
-  window stops preview enqueue and, unless a recording is running, slows or skips
-  frames. Recording always uses the native rate. The sidebar collapse is not fullscreen.
+  adapter decimates to `previewFPS` (30 or 60) by presentation timestamp. It never
+  writes `activeVideoMinFrameDuration` or `activeVideoMaxFrameDuration`. Hiding the
+  window stops preview enqueue and, unless a recording is running, skips most
+  buffers. Recording uses the same kept frames as the preview. The sidebar collapse
+  is not fullscreen. Do not force 32BGRA, and do not put a corner radius or material
+  behind the preview layer.
 - **Backend**: no CORS middleware (intentional — native client only, `allow_origins=["*"]` let any
   website drive the TV). Async tasks go through `manager._spawn()` (strong refs). Credentials are
   written atomically (`os.replace`); corrupt files are backed up, never silently overwritten.

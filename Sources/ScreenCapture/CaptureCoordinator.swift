@@ -13,17 +13,18 @@ import OSLog
 /// used. The same sample buffers feed the `AVSampleBufferDisplayLayer`
 /// preview, PNG screenshots, and the MP4 recorder.
 ///
-/// The device delivers about 60 fps. `VideoRecorder` timestamps each buffer
-/// and drops frames when the writer is not ready, so the session keeps that
-/// native rate. There is no 30 fps cap.
+/// The device delivers about 60 fps and rejects `activeVideoMinFrameDuration`
+/// / `activeVideoMaxFrameDuration` (muxed-only, no frame-rate ranges). Preview
+/// and recording share a software decimation to `previewFPS` (UserDefaults,
+/// 30 or 60, default 30): a buffer is kept when its presentation timestamp is
+/// at least `1/fps` minus a small tolerance after the last kept buffer.
+/// Changing the default applies on the next buffer; the session is not rebuilt.
 ///
 /// A hidden, minimized, or occluded window stops preview enqueue. Unless a
-/// recording is in progress, the sample delegate processes about two frames
-/// each second and still advances frame timing on every buffer. The Apple TV
-/// DAL device is muxed-only and has no video frame-rate ranges, so the
-/// session never writes `activeVideoMinFrameDuration` or
-/// `activeVideoMaxFrameDuration` — those setters throw.
-/// Recording is never throttled.
+/// recording is in progress, the sample delegate also limits preview and
+/// screenshot work to about two frames each second. Every buffer still
+/// advances frame timing. Recording receives the kept frames, including while
+/// the window is hidden.
 @MainActor
 final class CaptureCoordinator: NSObject, ObservableObject {
 
@@ -73,6 +74,9 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     // MARK: - Preview visibility
 
     private static let perfLog = Logger(subsystem: "com.mahmoudelgendy.AppleTVRemote", category: "perf")
+    static let previewFPSDefaultsKey = "previewFPS"
+    /// 30 or 60. Pushed into the live sample adapter; not a session rebuild.
+    private var previewFPS = 30
 
     private var lifetimeObservers: [NSObjectProtocol] = []
     private weak var previewWindow: NSWindow?
@@ -99,9 +103,12 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         )
         super.init()
         permissionGranted = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
+        UserDefaults.standard.register(defaults: [Self.previewFPSDefaultsKey: 30])
+        previewFPS = Self.clampedPreviewFPS(UserDefaults.standard.integer(forKey: Self.previewFPSDefaultsKey))
         observeCaptureDevices()
         observeSessionFailures()
         observePreviewVisibility()
+        observePreviewFPS()
     }
 
     deinit {
@@ -197,8 +204,9 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 
     func startRecording() async {
         guard isStreaming, !isRecording else { return }
-        // Native rate before the writer is attached. A hidden window must
-        // not leave the recording on the 2 fps cap.
+        // Clear the hidden-window skip before the writer is attached. A hide
+        // must not leave the recording on the 2 fps cap. Kept frames still
+        // follow previewFPS.
         recordingNeedsFullRate = true
         await applyPreviewDelivery()
         guard !previewThrottled else {
@@ -214,7 +222,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         do {
             let dir = try CaptureStorage.captureDirectory()
             let url = dir.appendingPathComponent(CaptureStorage.filename(kind: "recording", ext: "mp4"))
-            let recorder = try VideoRecorder(url: url, pixelSize: size)
+            let recorder = try VideoRecorder(url: url, pixelSize: size, framesPerSecond: previewFPS)
             self.recorder = recorder
             streamOutput?.recorder = recorder
             isRecording = true
@@ -248,8 +256,8 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             self.recorder = nil
             url = nil
         }
-        // Window still hidden → software ~2 fps. A visible window
-        // keeps the device's native rate.
+        // Window still hidden → software ~2 fps for preview work.
+        // A visible window keeps the selected previewFPS.
         await applyPreviewDelivery()
         return url
     }
@@ -325,10 +333,8 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 
         let output = AVCaptureVideoDataOutput()
         output.alwaysDiscardsLateVideoFrames = true
-        output.videoSettings = [
-            kCVPixelBufferPixelFormatTypeKey as String: NSNumber(value: kCVPixelFormatType_32BGRA),
-        ]
         let adapter = StreamOutputAdapter()
+        adapter.setPreviewFPS(previewFPS)
         if !previewVisible {
             adapter.setEnqueuesPreview(false)
         }
@@ -348,6 +354,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         }
         session.addOutput(output)
         Self.lockLargestVideoFormat(device)
+        Self.applyDisplayPixelFormat(output)
         session.commitConfiguration()
 
         let running = await runOnSessionQueue { () -> Bool in
@@ -506,6 +513,34 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         }
     }
 
+    /// `420v` is biplanar video-range YUV. `AVSampleBufferDisplayLayer`
+    /// composites that IOSurface directly, and the H.264 writer accepts it.
+    /// BGRA is not a native capture format — requesting it converts every frame.
+    /// macOS does not expose `availableVideoCVPixelFormatTypes`, so this is
+    /// the one format we ask for.
+    private static func applyDisplayPixelFormat(_ output: AVCaptureVideoDataOutput) {
+        let chosen = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        output.videoSettings = [
+            kCVPixelBufferPixelFormatTypeKey as String: NSNumber(value: chosen),
+        ]
+        log.info("capture pixel format \(fourCC(chosen), privacy: .public)")
+    }
+
+    nonisolated fileprivate static func fourCC(_ code: OSType) -> String {
+        let bytes = [
+            UInt8((code >> 24) & 0xff),
+            UInt8((code >> 16) & 0xff),
+            UInt8((code >> 8) & 0xff),
+            UInt8(code & 0xff),
+        ]
+        return String(bytes: bytes, encoding: .ascii) ?? String(code)
+    }
+
+    /// 60 stays 60. Any other stored value, including a missing key (0), is 30.
+    nonisolated static func clampedPreviewFPS(_ raw: Int) -> Int {
+        raw == 60 ? 60 : 30
+    }
+
     /// Full native resolution: the largest video format the device lists.
     /// When the device only advertises muxed formats (the verified Apple TV
     /// path), leave the default — that default is the 1920×1080 feed.
@@ -575,6 +610,29 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             }
         }
         lifetimeObservers.append(token)
+    }
+
+    private func observePreviewFPS() {
+        let token = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.applyPreviewFPSFromDefaults()
+            }
+        }
+        lifetimeObservers.append(token)
+    }
+
+    /// Reads `previewFPS` and pushes it to the live adapter. Does not rebuild
+    /// the capture session; the next sample buffer uses the new interval.
+    private func applyPreviewFPSFromDefaults() {
+        let fps = Self.clampedPreviewFPS(UserDefaults.standard.integer(forKey: Self.previewFPSDefaultsKey))
+        guard fps != previewFPS else { return }
+        previewFPS = fps
+        streamOutput?.setPreviewFPS(fps)
+        Self.perfLog.notice("preview fps \(fps, privacy: .public)")
     }
 
     private func observePreviewVisibility() {
@@ -732,12 +790,15 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 // MARK: - Sample buffer adapter
 
 /// Splits incoming camera sample buffers into the live preview layer and the
-/// recorder. Retains only the latest pixel buffer for screenshots.
-/// The display layer is not published; SwiftUI never sees individual frames.
-/// Preview enqueue pauses while the app window is not visible. While the
-/// window is hidden and nothing is recording, `skipsProcessing` keeps about
-/// two frames of preview and screenshot work each second. Every buffer still
-/// advances frame timing so a stall can be detected. A recording is never skipped.
+/// recorder. Retains only a reference to the latest pixel buffer; screenshots
+/// convert that buffer when asked. The display layer is not published.
+///
+/// Buffers are decimated by presentation timestamp to `previewFPS`. Recording
+/// gets the same kept buffers. Preview enqueue pauses while the app window is
+/// not visible. While the window is hidden and nothing is recording,
+/// `skipsProcessing` keeps about two frames of preview and screenshot work
+/// each second. Every buffer still advances frame timing so a stall can be
+/// detected. The hidden skip does not drop kept frames from a recording.
 final class StreamOutputAdapter: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private var latestPixelBuffer: CVPixelBuffer?
     private var pixelSize: CGSize?
@@ -749,6 +810,12 @@ final class StreamOutputAdapter: NSObject, AVCaptureVideoDataOutputSampleBufferD
     /// Far below the 45s silence restart, so the cap is not treated as a stall.
     private static let hiddenProcessInterval: TimeInterval = 0.5
     private var lastProcessedAt: Date?
+    private var targetFPS = 30
+    private var lastKeptPTS: CMTime = .invalid
+    /// 2ms. A 60 fps step is ~16.7ms, so `1/30 - 2ms` still rejects the frame
+    /// that sits between two kept frames. A 60 fps target keeps every step,
+    /// because each step is greater than `1/60 - 2ms`.
+    private static let keepTolerance = CMTime(value: 2, timescale: 1000)
 
     /// Written on the main actor, read on the sample queue — guarded by `lock`.
     private var _recorder: VideoRecorder?
@@ -787,6 +854,18 @@ final class StreamOutputAdapter: NSObject, AVCaptureVideoDataOutputSampleBufferD
         lock.unlock()
     }
 
+    /// Main thread. The sample queue reads the target under `lock`.
+    /// Resets the cadence so the next buffer is kept immediately.
+    func setPreviewFPS(_ fps: Int) {
+        let clamped = CaptureCoordinator.clampedPreviewFPS(fps)
+        lock.lock()
+        if targetFPS != clamped {
+            targetFPS = clamped
+            lastKeptPTS = .invalid
+        }
+        lock.unlock()
+    }
+
     /// Main thread. The sample queue reads the flag under `lock`.
     /// Ignored while a recorder is attached so a hide can't starve the file.
     func setSkipsProcessing(_ enabled: Bool) {
@@ -808,7 +887,9 @@ final class StreamOutputAdapter: NSObject, AVCaptureVideoDataOutputSampleBufferD
     }
     private var _frameCount = 0
     private var perfIntervalStart = Date()
-    private var perfIntervalStartCount = 0
+    private var rawInInterval = 0
+    private var keptInInterval = 0
+    private var didLogPixelFormat = false
     private static let perfLog = Logger(subsystem: "com.mahmoudelgendy.AppleTVRemote", category: "perf")
 
     /// When the most recent frame arrived. A feed that delivered frames and
@@ -826,17 +907,26 @@ final class StreamOutputAdapter: NSObject, AVCaptureVideoDataOutputSampleBufferD
         from connection: AVCaptureConnection
     ) {
         guard sampleBuffer.isValid, let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
 
         lock.lock()
         let now = Date()
         _frameCount += 1
         _lastFrameAt = now
+        rawInInterval += 1
+        let formatToLog: OSType? = didLogPixelFormat ? nil : CVPixelBufferGetPixelFormatType(pixelBuffer)
+        if formatToLog != nil { didLogPixelFormat = true }
+        let keep = shouldKeep(pts)
+        if keep {
+            lastKeptPTS = pts
+            keptInInterval += 1
+        }
         let throttled = skipsProcessing && _recorder == nil
         let withinHiddenInterval = lastProcessedAt.map {
             now.timeIntervalSince($0) < Self.hiddenProcessInterval
         } ?? false
-        let skip = throttled && withinHiddenInterval
-        if !skip {
+        let skipWork = !keep || (throttled && withinHiddenInterval)
+        if !skipWork {
             if throttled { lastProcessedAt = now }
             latestPixelBuffer = pixelBuffer
             pixelSize = CGSize(
@@ -844,24 +934,41 @@ final class StreamOutputAdapter: NSObject, AVCaptureVideoDataOutputSampleBufferD
                 height: CVPixelBufferGetHeight(pixelBuffer)
             )
         }
-        let layer = (!skip && enqueuesPreview) ? previewLayer : nil
-        let perfDue = Date().timeIntervalSince(perfIntervalStart) >= 10
-        let framesInInterval: Int
+        let layer = (!skipWork && enqueuesPreview) ? previewLayer : nil
+        let perfDue = now.timeIntervalSince(perfIntervalStart) >= 10
+        let keptLog = perfDue ? keptInInterval : 0
+        let rawLog = perfDue ? rawInInterval : 0
         if perfDue {
-            framesInInterval = _frameCount - perfIntervalStartCount
-            perfIntervalStartCount = _frameCount
-            perfIntervalStart = Date()
-        } else {
-            framesInInterval = 0
+            keptInInterval = 0
+            rawInInterval = 0
+            perfIntervalStart = now
         }
         lock.unlock()
-        if perfDue {
-            Self.perfLog.notice("frames \(framesInInterval, privacy: .public) in 10s")
+        if let formatToLog {
+            Self.perfLog.notice("pixel format \(CaptureCoordinator.fourCC(formatToLog), privacy: .public)")
         }
-        guard !skip else { return }
+        if perfDue {
+            Self.perfLog.notice("frames \(keptLog, privacy: .public) in 10s raw \(rawLog, privacy: .public)")
+        }
+        guard !skipWork else { return }
 
         recorder?.append(sampleBuffer: sampleBuffer)
         enqueuePreview(sampleBuffer, on: layer)
+    }
+
+    /// Lock held. First valid timestamp is kept. A backwards timestamp starts
+    /// a new cadence. An equal timestamp is a duplicate and is dropped.
+    private func shouldKeep(_ pts: CMTime) -> Bool {
+        guard pts.isValid else { return false }
+        guard lastKeptPTS.isValid else { return true }
+        let delta = CMTimeSubtract(pts, lastKeptPTS)
+        guard delta.isValid else { return true }
+        let order = CMTimeCompare(delta, .zero)
+        if order < 0 { return true }
+        if order == 0 { return false }
+        let interval = CMTime(value: 1, timescale: CMTimeScale(targetFPS))
+        let threshold = CMTimeSubtract(interval, Self.keepTolerance)
+        return CMTimeCompare(delta, threshold) >= 0
     }
 
     /// The renderer retains the sample buffer and composites its IOSurface;
