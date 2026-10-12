@@ -1,14 +1,16 @@
+import AppKit
 import AVFoundation
+import Combine
 import CoreGraphics
 import CoreImage
 import Foundation
 import OSLog
 import ScreenCaptureKit
-import SwiftUI
 
 /// Drives the ScreenCaptureKit pipeline that mirrors QuickTime Player's
-/// wireless Apple TV window into the app: a low-rate preview stream, one-shot
-/// PNG screenshots, and MP4 recordings — all derived from the same `SCStream`.
+/// wireless Apple TV window into the app: a full-rate preview on an
+/// `AVSampleBufferDisplayLayer`, one-shot PNG screenshots, and MP4 recordings
+/// — all derived from the same `SCStream`.
 ///
 /// The Apple TV is invisible to public capture APIs, but the QuickTime window
 /// that displays it isn't; grabbing that window is our only realistic path.
@@ -18,7 +20,6 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     // MARK: - Published state (consumed by ContentView)
 
     @Published private(set) var permissionGranted: Bool = false
-    @Published private(set) var previewImage: NSImage?
     @Published private(set) var quicktimeWindow: DetectedWindow?
     @Published private(set) var isStreaming: Bool = false
     @Published private(set) var isRecording: Bool = false
@@ -42,7 +43,9 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 
     private let sampleQueue = DispatchQueue(label: "capture.samples", qos: .userInitiated)
     private var stream: SCStream?
-    private var streamOutput: StreamOutputAdapter?
+    /// Not published. Frames go straight to the display layer; publishing the
+    /// adapter or each frame would redraw ContentView at the capture rate.
+    private(set) var streamOutput: StreamOutputAdapter?
     private var recorder: VideoRecorder?
     private var recordingTimer: Timer?
     private var recordingStartedAt: Date?
@@ -414,7 +417,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 
         let filter = SCContentFilter(desktopIndependentWindow: window)
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
-        let output = StreamOutputAdapter(owner: self, pixelSize: CGSize(width: pixelWidth, height: pixelHeight))
+        let output = StreamOutputAdapter(pixelSize: CGSize(width: pixelWidth, height: pixelHeight))
         try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: sampleQueue)
         try await stream.startCapture()
 
@@ -426,7 +429,6 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 
     private func stopStream() async {
         isStreaming = false
-        previewImage = nil
         streamStartedAt = nil
         didFocusOnConnect = false
         if isRecording { _ = await stopRecording() }
@@ -456,13 +458,6 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             return recording
         }
         return candidates.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
-    }
-
-    // MARK: - Preview (called from adapter)
-
-    /// Publishes a preview frame rendered off the main actor by the adapter.
-    fileprivate func setPreviewImage(_ image: NSImage?) {
-        previewImage = image
     }
 
     // MARK: - Recording timer
@@ -518,7 +513,6 @@ extension CaptureCoordinator: SCStreamDelegate {
             // Don't let a recording dangle after the stream dies.
             if self.isRecording { _ = await self.stopRecording() }
             self.isStreaming = false
-            self.previewImage = nil
             self.lastError = "Stream stopped: \(error.localizedDescription)"
         }
     }
@@ -526,14 +520,14 @@ extension CaptureCoordinator: SCStreamDelegate {
 
 // MARK: - Stream output adapter (background queue → coordinator)
 
-/// Splits incoming sample buffers into (a) throttled preview updates for the UI
-/// and (b) full-rate frames for the recorder. Retains only the latest pixel
-/// buffer for the screenshot path so we don't accumulate memory.
-private final class StreamOutputAdapter: NSObject, SCStreamOutput {
-    weak var owner: CaptureCoordinator?
+/// Splits incoming sample buffers into the live preview layer and the
+/// recorder. Retains only the latest pixel buffer for screenshots.
+/// The display layer is not published; SwiftUI never sees individual frames.
+final class StreamOutputAdapter: NSObject, SCStreamOutput {
     private(set) var currentPixelSize: CGSize
     private var latestPixelBuffer: CVPixelBuffer?
     private let lock = NSLock()
+    private weak var previewLayer: AVSampleBufferDisplayLayer?
 
     /// Written on the main actor, read on the sample queue — guarded by `lock`.
     private var _recorder: VideoRecorder?
@@ -542,16 +536,14 @@ private final class StreamOutputAdapter: NSObject, SCStreamOutput {
         set { lock.lock(); _recorder = newValue; lock.unlock() }
     }
 
-    // Preview throttling/coalescing: ~10fps is enough for the UI; frames are
-    // dropped while a render is in flight so we never spawn one Task per frame.
-    private let previewInterval: TimeInterval = 0.1
-    private var lastPreviewUpdate: Date = .distantPast
-    private var previewRenderInFlight = false
-    private let previewRenderQueue = DispatchQueue(label: "capture.preview", qos: .userInitiated)
-    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+    /// Main-thread only. The sample queue reads the layer under `lock`.
+    func attachPreviewLayer(_ layer: AVSampleBufferDisplayLayer?) {
+        lock.lock()
+        previewLayer = layer
+        lock.unlock()
+    }
 
-    init(owner: CaptureCoordinator, pixelSize: CGSize) {
-        self.owner = owner
+    init(pixelSize: CGSize) {
         self.currentPixelSize = pixelSize
     }
 
@@ -590,36 +582,27 @@ private final class StreamOutputAdapter: NSObject, SCStreamOutput {
               status == .complete else { return }
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-        lock.lock(); latestPixelBuffer = pixelBuffer; _frameCount += 1; _lastFrameAt = Date(); lock.unlock()
-
-        recorder?.append(sampleBuffer: sampleBuffer)
-
-        // Throttle + coalesce previews: skip if too soon or a render is in flight.
         lock.lock()
-        let now = Date()
-        let due = now.timeIntervalSince(lastPreviewUpdate) >= previewInterval && !previewRenderInFlight
-        if due {
-            lastPreviewUpdate = now
-            previewRenderInFlight = true
-        }
+        latestPixelBuffer = pixelBuffer
+        _frameCount += 1
+        _lastFrameAt = Date()
+        let layer = previewLayer
         lock.unlock()
-        guard due else { return }
 
-        // Render off the main actor; only the finished NSImage hops over.
-        previewRenderQueue.async { [weak self, weak owner] in
-            guard let self else { return }
-            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-            var image: NSImage?
-            if let cg = self.ciContext.createCGImage(ciImage, from: ciImage.extent) {
-                image = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
-            }
-            Task { @MainActor in
-                owner?.setPreviewImage(image)
-                self.lock.lock()
-                self.previewRenderInFlight = false
-                self.lock.unlock()
-            }
+        // Recorder sees the original ScreenCaptureKit buffer, unmodified.
+        recorder?.append(sampleBuffer: sampleBuffer)
+        enqueuePreview(sampleBuffer, on: layer)
+    }
+
+    /// Every complete frame, at the stream's existing rate. The renderer
+    /// retains the sample buffer and composites its IOSurface; no CPU readback.
+    private func enqueuePreview(_ sampleBuffer: CMSampleBuffer, on layer: AVSampleBufferDisplayLayer?) {
+        guard let layer else { return }
+        let renderer = layer.sampleBufferRenderer
+        if renderer.status == .failed {
+            renderer.flush()
         }
+        renderer.enqueue(sampleBuffer)
     }
 }
 

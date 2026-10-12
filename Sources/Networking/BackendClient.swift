@@ -288,7 +288,7 @@ final class BackendClient: ObservableObject {
     }
 
     func refreshPlaying() async {
-        if let p: PlayingState = try? await request("GET", "api/playing") {
+        if let p: PlayingState = try? await request("GET", "api/playing"), p != playing {
             playing = p
         }
     }
@@ -399,7 +399,7 @@ final class BackendClient: ObservableObject {
         guard let env = try? JSONDecoder().decode(Envelope.self, from: data) else { return }
         switch env.type {
         case "playing":
-            if let s = env.state { playing = s }
+            if let s = env.state, s != playing { playing = s }
         case "disconnected":
             // Backend detected the Apple TV connection died (network drop,
             // TV reboot). Reflect it; refreshAndReconnect() can recover.
@@ -413,7 +413,7 @@ final class BackendClient: ObservableObject {
         default:
             // Legacy untagged payload, treat as playing state.
             if env.title != nil || env.device_state != nil {
-                if let s = try? JSONDecoder().decode(PlayingState.self, from: data) {
+                if let s = try? JSONDecoder().decode(PlayingState.self, from: data), s != playing {
                     playing = s
                 }
             }

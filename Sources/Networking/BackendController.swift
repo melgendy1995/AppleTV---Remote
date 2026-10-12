@@ -77,12 +77,17 @@ final class BackendController: ObservableObject {
         stderrPipe = pipe
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            if data.isEmpty { return }
-            if let s = String(data: data, encoding: .utf8) {
-                Task { @MainActor in
-                    // Keep only the last ~4 KB so we don't grow forever.
-                    let combined = (self?.stderrTail ?? "") + s
-                    self?.stderrTail = String(combined.suffix(4096))
+            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            Task { @MainActor in
+                guard let self else { return }
+                // RootView observes this object. Publishing every uvicorn line
+                // while the backend is up redraws the remote for each log line.
+                // The tail is only shown on the boot/failure screen.
+                switch self.state {
+                case .failed, .starting:
+                    self.stderrTail = String((self.stderrTail + text).suffix(4096))
+                case .idle, .running, .external:
+                    break
                 }
             }
         }

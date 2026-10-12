@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import SwiftUI
 
 /// Cinema layout: the QuickTime capture stream fills the left stage; a compact
@@ -84,10 +85,8 @@ struct ContentView: View {
     private var stage: some View {
         ZStack {
             Color.black
-            if let image = capture.previewImage {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
+            if capture.isStreaming, let adapter = capture.streamOutput {
+                SampleBufferPreview(adapter: adapter)
             } else {
                 stagePlaceholder
             }
@@ -307,7 +306,11 @@ struct ContentView: View {
         capturePollTask = Task {
             while !Task.isCancelled {
                 await capture.startIfPossible()
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                // Healthy means a frame has already arrived. Until then the
+                // poll is what opens QuickTime and starts the stream.
+                let streamingHealthy = capture.isStreaming && (capture.streamOutput?.frameCount ?? 0) > 0
+                let pauseNs: UInt64 = streamingHealthy ? 5_000_000_000 : 2_000_000_000
+                try? await Task.sleep(nanoseconds: pauseNs)
             }
         }
     }
@@ -357,6 +360,57 @@ struct ContentView: View {
             showKeyboard = false
             keyboardAutoOpened = false
         }
+    }
+}
+
+/// Hosts the capture preview. The layer is updated from the sample queue,
+/// so SwiftUI does not re-render the window for each frame.
+private struct SampleBufferPreview: NSViewRepresentable {
+    let adapter: StreamOutputAdapter
+
+    func makeNSView(context: Context) -> SampleBufferHostView {
+        let view = SampleBufferHostView()
+        view.attach(adapter)
+        return view
+    }
+
+    func updateNSView(_ nsView: SampleBufferHostView, context: Context) {
+        nsView.attach(adapter)
+    }
+
+    static func dismantleNSView(_ nsView: SampleBufferHostView, coordinator: ()) {
+        nsView.detach()
+    }
+}
+
+private final class SampleBufferHostView: NSView {
+    private var adapter: StreamOutputAdapter?
+
+    func attach(_ adapter: StreamOutputAdapter?) {
+        if self.adapter !== adapter {
+            self.adapter?.attachPreviewLayer(nil)
+            self.adapter = adapter
+        }
+        wantsLayer = true
+        let display = (layer as? AVSampleBufferDisplayLayer) ?? AVSampleBufferDisplayLayer()
+        if layer !== display {
+            display.videoGravity = .resizeAspect
+            display.backgroundColor = NSColor.black.cgColor
+            layer = display
+        }
+        display.frame = bounds
+        adapter?.attachPreviewLayer(display)
+    }
+
+    func detach() {
+        adapter?.attachPreviewLayer(nil)
+        adapter = nil
+        (layer as? AVSampleBufferDisplayLayer)?.sampleBufferRenderer.flush()
+    }
+
+    override func layout() {
+        super.layout()
+        layer?.frame = bounds
     }
 }
 
