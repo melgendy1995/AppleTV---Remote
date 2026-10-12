@@ -12,7 +12,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Rectangle().fill(.ultraThinMaterial).ignoresSafeArea()
+                Theme.bg.ignoresSafeArea()
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Backend URL")
                         .font(.system(size: 12))

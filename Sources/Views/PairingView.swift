@@ -17,7 +17,7 @@ struct PairingView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Rectangle().fill(.ultraThinMaterial).ignoresSafeArea()
+                Theme.bg.ignoresSafeArea()
                 VStack(alignment: .leading, spacing: 14) {
                     Text(status)
                         .font(.system(size: 13))
@@ -109,7 +109,7 @@ struct PairingView: View {
                 Text(chip.label)
                     .font(.system(size: 11))
                     .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(color(for: chip.tag).opacity(0.18))
+                    .background(Theme.surface2)
                     .foregroundColor(color(for: chip.tag))
                     .clipShape(Capsule())
             }

@@ -41,6 +41,9 @@ final class QuickTimeController {
     /// Section headers inside the capture-source menu. Apple TVs live under
     /// "Screen"; the same names repeat under "Speaker" (audio out).
     private static let menuSections: Set<String> = ["Camera", "Microphone", "Screen", "Speaker", "Quality"]
+    /// Points of the window left on the desktop. Zero overlap stalls capture.
+    private static let parkedOverlap: CGFloat = 8
+    private static let parkedOriginKey = "parkedQuickTimeWindowOrigin"
 
     // MARK: - App lifecycle
 
@@ -175,6 +178,42 @@ final class QuickTimeController {
         axWindows().contains { title(of: $0) == Self.recordingWindowTitle }
     }
 
+    /// Slide the Movie Recording window just past the left edge of the whole
+    /// desktop. Minimizing, hiding, or detaching it fully stops
+    /// `SCContentFilter(desktopIndependentWindow:)`. An 8pt overlap keeps the
+    /// backing store live; that sliver is all WindowServer still composites.
+    func parkRecordingWindowMostlyOffscreen() {
+        guard parkedOrigin == nil else { return }
+        guard let placed = recordingWindowPlacement() else { return }
+        let visible = onScreenWidth(placed.frame)
+        if visible > 0, visible <= Self.parkedOverlap + 2 {
+            parkedOrigin = rememberedOrigin() ?? placed.origin
+            return
+        }
+        guard let parked = parkedPosition(current: placed.origin, size: placed.size),
+              setPosition(placed.window, parked) else { return }
+        let restorePoint = rememberedOrigin() ?? placed.origin
+        parkedOrigin = restorePoint
+        rememberOrigin(restorePoint)
+        Self.log.info("parked Movie Recording window")
+    }
+
+    /// Put the window back where it was before parking. No-op until a park
+    /// has saved an origin. Keeps the saved point if QuickTime is up but the
+    /// recording window is not readable yet.
+    func restoreRecordingWindow() {
+        let origin = parkedOrigin ?? rememberedOrigin()
+        guard let origin else { return }
+        guard isRunning else {
+            clearParkedOrigin()
+            return
+        }
+        guard let window = recordingWindow() else { return }
+        guard setPosition(window, origin) else { return }
+        clearParkedOrigin()
+        Self.log.info("restored Movie Recording window")
+    }
+
     /// True when QuickTime is showing an error (alert sheet or dialog) —
     /// e.g. "Apple TV is not available". The caller's recovery path quits and
     /// reopens QuickTime in this state.
@@ -257,6 +296,95 @@ final class QuickTimeController {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, "AXMenuItemMarkChar" as CFString, &value) == .success else { return nil }
         return value as? String
+    }
+
+    /// On-screen top-left (AX coordinates) captured before the window was parked.
+    private var parkedOrigin: CGPoint?
+
+    private struct WindowPlacement {
+        let window: AXUIElement
+        let origin: CGPoint
+        let size: CGSize
+        let frame: CGRect
+    }
+
+    private func recordingWindow() -> AXUIElement? {
+        axWindows().first { title(of: $0) == Self.recordingWindowTitle }
+    }
+
+    private func recordingWindowPlacement() -> WindowPlacement? {
+        guard let window = recordingWindow(),
+              let origin = copyAXValue(window, kAXPositionAttribute, .cgPoint, CGPoint.zero),
+              let size = copyAXValue(window, kAXSizeAttribute, .cgSize, CGSize.zero),
+              let frame = appKitFrame(axOrigin: origin, size: size) else { return nil }
+        return WindowPlacement(window: window, origin: origin, size: size, frame: frame)
+    }
+
+    /// AX positions are top-left, Y down. AppKit frames are bottom-left, Y up.
+    /// Flip against the menu-bar screen (`NSScreen.screens` is ordered that way).
+    private func appKitFrame(axOrigin: CGPoint, size: CGSize) -> CGRect? {
+        guard size.width.isFinite, size.height.isFinite, size.width > 1, size.height > 1,
+              axOrigin.x.isFinite, axOrigin.y.isFinite,
+              let primary = NSScreen.screens.first else { return nil }
+        let bottom = NSMaxY(primary.frame) - axOrigin.y - size.height
+        return CGRect(x: axOrigin.x, y: bottom, width: size.width, height: size.height)
+    }
+
+    private func desktopBounds() -> CGRect? {
+        let screens = NSScreen.screens
+        guard let first = screens.first else { return nil }
+        return screens.dropFirst().reduce(first.frame) { $0.union($1.frame) }
+    }
+
+    private func onScreenWidth(_ windowFrame: CGRect) -> CGFloat {
+        NSScreen.screens.reduce(0) { total, screen in
+            let hit = screen.frame.intersection(windowFrame)
+            guard !hit.isNull, !hit.isEmpty else { return total }
+            return total + hit.width
+        }
+    }
+
+    /// Left of every display, so a neighbor screen cannot still show the window.
+    private func parkedPosition(current: CGPoint, size: CGSize) -> CGPoint? {
+        guard let desktop = desktopBounds() else { return nil }
+        return CGPoint(x: desktop.minX - size.width + Self.parkedOverlap, y: current.y)
+    }
+
+    private func copyAXValue<T>(_ element: AXUIElement, _ attribute: String, _ type: AXValueType, _ initial: T) -> T? {
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &raw) == .success,
+              let raw, CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+        var decoded = initial
+        guard AXValueGetValue(raw as! AXValue, type, &decoded) else { return nil }
+        return decoded
+    }
+
+    private func setPosition(_ element: AXUIElement, _ point: CGPoint) -> Bool {
+        var point = point
+        guard let value = AXValueCreate(.cgPoint, &point) else { return false }
+        let err = AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, value)
+        if err != .success {
+            Self.log.error("set position failed: \(err.rawValue)")
+            return false
+        }
+        return true
+    }
+
+    private func rememberOrigin(_ point: CGPoint) {
+        UserDefaults.standard.set("\(point.x) \(point.y)", forKey: Self.parkedOriginKey)
+    }
+
+    private func rememberedOrigin() -> CGPoint? {
+        guard let text = UserDefaults.standard.string(forKey: Self.parkedOriginKey) else { return nil }
+        let parts = text.split(separator: " ")
+        guard parts.count == 2, let x = Double(parts[0]), let y = Double(parts[1]),
+              x.isFinite, y.isFinite else { return nil }
+        return CGPoint(x: x, y: y)
+    }
+
+    private func clearParkedOrigin() {
+        parkedOrigin = nil
+        UserDefaults.standard.removeObject(forKey: Self.parkedOriginKey)
     }
 
     private func press(_ element: AXUIElement) {

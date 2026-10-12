@@ -12,64 +12,44 @@ enum Theme {
     static let text      = Color(red: 0.953, green: 0.953, blue: 0.961)
 }
 
-// MARK: - Liquid Glass
+// MARK: - Opaque surfaces
 
-/// Glass background for cards, pills and buttons. Uses the native Liquid Glass
-/// effect on macOS 26 (Tahoe); falls back to an ultra-thin material with a
-/// hairline highlight on older systems. A `tint` colors the glass (accent,
-/// danger, good); without one the glass is neutral.
-struct GlassBackground<S: Shape>: ViewModifier {
+/// Solid fill behind cards, pills, and buttons. Blur and glass materials
+/// sample whatever is behind them, so they stay out of the preview and sidebar.
+struct OpaqueSurface<S: Shape>: ViewModifier {
     let shape: S
-    var tint: Color? = nil
-    var interactive: Bool = false
-    var isPressed: Bool = false
+    let fill: Color
+    var stroke: Color = Theme.border
 
     func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
-            content.glassEffect(glass, in: shape)
-        } else if let tint {
-            content
-                .background(tint.opacity(isPressed ? 0.7 : 1.0), in: shape)
-                .overlay(shape.stroke(Color.white.opacity(0.3), lineWidth: 1))
-        } else {
-            content
-                .background(.ultraThinMaterial, in: shape)
-                .overlay(shape.stroke(Color.white.opacity(0.18), lineWidth: 1))
-                .shadow(color: .black.opacity(0.3), radius: 8, y: 3)
-        }
-    }
-
-    @available(macOS 26.0, *)
-    private var glass: Glass {
-        var g: Glass = interactive ? .regular.interactive() : .regular
-        if let tint { g = g.tint(tint.opacity(isPressed ? 0.8 : 0.45)) }
-        return g
+        content
+            .background(fill, in: shape)
+            .overlay(shape.stroke(stroke, lineWidth: 1))
     }
 }
 
 extension View {
-    /// Card/panel glass surface with a continuous rounded corner.
-    func glassCard(cornerRadius: CGFloat = 14, tint: Color? = nil, interactive: Bool = false) -> some View {
-        modifier(GlassBackground(
+    /// `tint` colors the border only; the fill stays opaque so it does not blur the preview.
+    func glassCard(cornerRadius: CGFloat = 14, tint: Color? = nil) -> some View {
+        modifier(OpaqueSurface(
             shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous),
-            tint: tint, interactive: interactive))
+            fill: Theme.surface,
+            stroke: tint ?? Theme.border))
     }
 
-    /// Glass capsule background (pill buttons, status banners).
-    func glassCapsule(tint: Color? = nil, interactive: Bool = true) -> some View {
-        modifier(GlassBackground(shape: Capsule(), tint: tint, interactive: interactive))
+    func glassCapsule(tint: Color? = nil) -> some View {
+        modifier(OpaqueSurface(shape: Capsule(), fill: tint ?? Theme.surface))
     }
 
-    /// Glass circle background (D-pad ring, select button).
-    func glassCircle(tint: Color? = nil, interactive: Bool = true) -> some View {
-        modifier(GlassBackground(shape: Circle(), tint: tint, interactive: interactive))
+    func glassCircle(tint: Color? = nil) -> some View {
+        modifier(OpaqueSurface(shape: Circle(), fill: tint ?? Theme.surface))
     }
 
-    /// Glass background behind a button label (rounded rect, press-aware).
     func glassButton(tint: Color? = nil, cornerRadius: CGFloat = 14, isPressed: Bool = false) -> some View {
-        modifier(GlassBackground(
+        let fill = isPressed ? Theme.surface2 : (tint ?? Theme.surface)
+        return modifier(OpaqueSurface(
             shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous),
-            tint: tint, interactive: true, isPressed: isPressed))
+            fill: fill))
     }
 }
 

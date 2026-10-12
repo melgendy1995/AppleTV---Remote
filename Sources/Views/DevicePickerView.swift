@@ -15,7 +15,7 @@ struct DevicePickerView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Rectangle().fill(.ultraThinMaterial).ignoresSafeArea()
+                Theme.bg.ignoresSafeArea()
                 ScrollView {
                     VStack(spacing: 10) {
                         if scanning && client.devices.isEmpty {
@@ -94,7 +94,7 @@ struct DevicePickerView: View {
             Text(device.isPaired ? "Paired" : "Not paired")
                 .font(.system(size: 10).bold())
                 .padding(.horizontal, 7).padding(.vertical, 2)
-                .background(device.isPaired ? Theme.good.opacity(0.2) : Theme.border)
+                .background(device.isPaired ? Theme.surface2 : Theme.border)
                 .foregroundColor(device.isPaired ? Theme.good : Theme.muted)
                 .clipShape(Capsule())
             if client.isConnectedDevice(device) {

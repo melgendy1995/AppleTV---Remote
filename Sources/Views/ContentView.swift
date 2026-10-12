@@ -132,7 +132,6 @@ struct ContentView: View {
                 .buttonStyle(SurfaceButton())
                 .frame(width: 200)
             } else {
-                ProgressView().controlSize(.small).tint(Theme.muted)
                 Text("Connecting to \(capture.quicktimeWindow?.title ?? "QuickTime")…")
                     .font(.system(size: 12))
                     .foregroundColor(Theme.muted)
@@ -146,13 +145,12 @@ struct ContentView: View {
                 if capture.isRecording {
                     HStack(spacing: 6) {
                         Circle().fill(Theme.danger).frame(width: 10, height: 10)
-                            .shadow(color: Theme.danger.opacity(0.7), radius: 4)
                         Text("\(formatElapsed(capture.recordingElapsed)) · \(formatBytes(capture.recordingFileSize))")
                             .font(.system(size: 13, weight: .semibold, design: .monospaced))
                             .foregroundColor(.white)
                     }
                     .padding(.horizontal, 10).padding(.vertical, 5)
-                    .glassCapsule(interactive: false)
+                    .glassCapsule()
                 }
                 Spacer()
             }
@@ -170,7 +168,6 @@ struct ContentView: View {
             NowPlayingCard()
             RemoteControlsView()
                 .disabled(!client.connected)
-                .opacity(client.connected ? 1 : 0.4)
             Divider().overlay(Theme.border)
             captureActions
             if let url = savedURL { savedToast(url: url) }
@@ -185,7 +182,7 @@ struct ContentView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .frame(maxHeight: .infinity)
-        .background(.ultraThinMaterial)
+        .background(Theme.bg)
     }
 
     private var topbar: some View {
@@ -198,7 +195,6 @@ struct ContentView: View {
                 Circle()
                     .fill(client.connected ? Theme.good : Theme.muted)
                     .frame(width: 9, height: 9)
-                    .shadow(color: client.connected ? Theme.good.opacity(0.6) : .clear, radius: 4)
                 Text(client.connected ? (client.connectedDevice?.name ?? "Connected") : "Not connected")
                     .font(.system(size: 13))
                     .foregroundColor(Theme.muted)

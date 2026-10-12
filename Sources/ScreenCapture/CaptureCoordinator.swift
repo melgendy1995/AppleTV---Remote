@@ -86,6 +86,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     override init() {
         super.init()
         permissionGranted = CGPreflightScreenCaptureAccess()
+        qt.restoreRecordingWindow()
     }
 
     /// Trigger the system prompt if we haven't been granted permission yet.
@@ -174,7 +175,12 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             }
             if let current = quicktimeWindow,
                current.windowID == window.windowID,
-               isStreaming { return }
+               isStreaming {
+                if (streamOutput?.frameCount ?? 0) > 0 {
+                    qt.parkRecordingWindowMostlyOffscreen()
+                }
+                return
+            }
             Self.log.info("unmanaged: starting stream for window \(window.windowID)")
             quicktimeWindow = DetectedWindow(
                 windowID: window.windowID,
@@ -199,6 +205,10 @@ final class CaptureCoordinator: NSObject, ObservableObject {
                 pollNote("healthy")
                 recoveryAttempts = 0
                 if lastError != nil { lastError = nil }
+                // Frames are flowing, so the desktop-independent filter is
+                // live. Park after that — moving sooner would make a frozen
+                // feed look like QuickTime never connected.
+                qt.parkRecordingWindowMostlyOffscreen()
                 // The screen just came up — bring the remote forward so the
                 // user sees it (once per connect, not every poll).
                 if !didFocusOnConnect {
@@ -329,6 +339,11 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         quicktimeWindow = nil
     }
 
+    /// Called on stream stop and on quit. Safe to call more than once.
+    func restoreParkedQuickTimeWindow() {
+        qt.restoreRecordingWindow()
+    }
+
     // MARK: - Screenshot
 
     /// Convert the latest received frame to a PNG on disk. Returns nil (with
@@ -431,6 +446,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         isStreaming = false
         streamStartedAt = nil
         didFocusOnConnect = false
+        restoreParkedQuickTimeWindow()
         if isRecording { _ = await stopRecording() }
         if let stream {
             try? await stream.stopCapture()
@@ -561,6 +577,9 @@ final class StreamOutputAdapter: NSObject, SCStreamOutput {
         return _frameCount
     }
     private var _frameCount = 0
+    private var perfIntervalStart = Date()
+    private var perfIntervalStartCount = 0
+    private static let perfLog = Logger(subsystem: "com.mahmoudelgendy.AppleTVRemote", category: "perf")
 
     /// When the most recent complete frame arrived. A feed that delivered
     /// frames and then goes silent for a long stretch is frozen (share
@@ -587,7 +606,19 @@ final class StreamOutputAdapter: NSObject, SCStreamOutput {
         _frameCount += 1
         _lastFrameAt = Date()
         let layer = previewLayer
+        let perfDue = Date().timeIntervalSince(perfIntervalStart) >= 10
+        let framesInInterval: Int
+        if perfDue {
+            framesInInterval = _frameCount - perfIntervalStartCount
+            perfIntervalStartCount = _frameCount
+            perfIntervalStart = Date()
+        } else {
+            framesInInterval = 0
+        }
         lock.unlock()
+        if perfDue {
+            Self.perfLog.notice("frames \(framesInInterval, privacy: .public) in 10s")
+        }
 
         // Recorder sees the original ScreenCaptureKit buffer, unmodified.
         recorder?.append(sampleBuffer: sampleBuffer)

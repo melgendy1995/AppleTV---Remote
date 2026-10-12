@@ -29,7 +29,7 @@ struct RemoteControlsView: View {
             ZStack {
                 Circle()
                     .fill(.clear)
-                    .glassCircle(interactive: false)
+                    .glassCircle()
                 VStack(spacing: 0) {
                     dpadButton("▲", command: "up")
                     HStack(spacing: 0) {

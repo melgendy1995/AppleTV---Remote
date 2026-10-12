@@ -14,7 +14,7 @@ struct KeyboardView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Rectangle().fill(.ultraThinMaterial).ignoresSafeArea()
+                Theme.bg.ignoresSafeArea()
                 VStack(alignment: .leading, spacing: 14) {
                     Text(hint)
                         .font(.system(size: 13))
