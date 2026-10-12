@@ -18,11 +18,12 @@ import OSLog
 /// native rate. There is no 30 fps cap.
 ///
 /// A hidden, minimized, or occluded window stops preview enqueue. Unless a
-/// recording is in progress, delivery also drops to 2 fps via
-/// `activeVideoMinFrameDuration` when that rate is in the active format's
-/// supported ranges. If the device refuses the cap, the sample delegate
-/// keeps frame timing and skips preview, screenshot, and recorder work.
-/// Recording always restores the native duration first and is never throttled.
+/// recording is in progress, the sample delegate processes about two frames
+/// each second and still advances frame timing on every buffer. The Apple TV
+/// DAL device is muxed-only and has no video frame-rate ranges, so the
+/// session never writes `activeVideoMinFrameDuration` or
+/// `activeVideoMaxFrameDuration` — those setters throw.
+/// Recording is never throttled.
 @MainActor
 final class CaptureCoordinator: NSObject, ObservableObject {
 
@@ -71,9 +72,6 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 
     // MARK: - Preview visibility
 
-    /// 2 fps while the preview is off screen and nothing is recording.
-    /// Far below the 45s silence restart, so the cap is not treated as a stall.
-    private static let hiddenFrameInterval = CMTime(value: 1, timescale: 2)
     private static let perfLog = Logger(subsystem: "com.mahmoudelgendy.AppleTVRemote", category: "perf")
 
     private var lifetimeObservers: [NSObjectProtocol] = []
@@ -250,8 +248,8 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             self.recorder = nil
             url = nil
         }
-        // Window still hidden → back to 2 fps (or delegate skipping).
-        // A visible window stays at the device's native rate.
+        // Window still hidden → software ~2 fps. A visible window
+        // keeps the device's native rate.
         await applyPreviewDelivery()
         return url
     }
@@ -655,72 +653,28 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         }
         let slowDown = !visible && !isRecording && !recordingNeedsFullRate
         if slowDown {
-            previewThrottled = await slowHiddenDelivery()
+            previewThrottled = slowHiddenDelivery()
         } else {
-            let restored = await restoreFullDelivery()
+            let restored = restoreFullDelivery()
             previewThrottled = !restored
         }
         guard isStreaming else { return }
         logPreviewDeliveryIfChanged()
     }
 
-    /// Device accepted 2 fps, or the delegate will skip work instead.
-    private func slowHiddenDelivery() async -> Bool {
-        guard let device = captureDevice else { return false }
-        let adapter = streamOutput
-        let limited = await runOnSessionQueue {
-            Self.limitFrameRateForHiddenPreview(device: device)
-        }
-        adapter?.setSkipsProcessing(!limited)
+    /// Software cap while the window is hidden. The DAL device throws if a
+    /// frame duration is written, so the delegate throttles instead.
+    private func slowHiddenDelivery() -> Bool {
+        guard captureDevice != nil else { return false }
+        streamOutput?.setSkipsProcessing(true)
         return true
     }
 
-    /// `false` only when a duration was previously written and could not be cleared.
-    private func restoreFullDelivery() async -> Bool {
-        guard let device = captureDevice else { return true }
-        let adapter = streamOutput
-        let restored = await runOnSessionQueue {
-            Self.restoreNativeFrameRate(device: device)
-        }
-        adapter?.setSkipsProcessing(false)
-        return restored
-    }
-
-    private static func limitFrameRateForHiddenPreview(device: AVCaptureDevice) -> Bool {
-        // Automatic frame-rate mode throws if a duration is set. The caller
-        // then skips buffers in the delegate instead.
-        if #available(macOS 15.0, *), device.isAutoVideoFrameRateEnabled { return false }
-        guard supportsLockedFrameRate(2, device: device) else { return false }
-        return setFrameDuration(hiddenFrameInterval, on: device)
-    }
-
-    private static func restoreNativeFrameRate(device: AVCaptureDevice) -> Bool {
-        // Nothing to undo when the device owns its frame rate — the hidden
-        // path never wrote a duration in that mode.
-        if #available(macOS 15.0, *), device.isAutoVideoFrameRateEnabled { return true }
-        return setFrameDuration(.invalid, on: device)
-    }
-
-    /// `kCMTimeInvalid` is the documented reset. Any other value must already
-    /// have been checked against `videoSupportedFrameRateRanges`; an
-    /// unsupported duration raises an Objective-C exception.
-    private static func setFrameDuration(_ interval: CMTime, on device: AVCaptureDevice) -> Bool {
-        do {
-            try device.lockForConfiguration()
-        } catch {
-            log.error("frame-rate lock failed: \(error.localizedDescription, privacy: .public)")
-            return false
-        }
-        device.activeVideoMinFrameDuration = interval
-        device.activeVideoMaxFrameDuration = interval
-        device.unlockForConfiguration()
+    /// Clears the software cap. Nothing was written on the device.
+    private func restoreFullDelivery() -> Bool {
+        guard captureDevice != nil else { return true }
+        streamOutput?.setSkipsProcessing(false)
         return true
-    }
-
-    private static func supportsLockedFrameRate(_ rate: Double, device: AVCaptureDevice) -> Bool {
-        device.activeFormat.videoSupportedFrameRateRanges.contains { range in
-            range.minFrameRate <= rate && rate <= range.maxFrameRate
-        }
     }
 
     private func logPreviewDeliveryIfChanged() {
@@ -781,8 +735,9 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 /// recorder. Retains only the latest pixel buffer for screenshots.
 /// The display layer is not published; SwiftUI never sees individual frames.
 /// Preview enqueue pauses while the app window is not visible. While the
-/// window is hidden and nothing is recording, `skipsProcessing` drops the
-/// buffer work; frame timing still advances so a stall can be detected.
+/// window is hidden and nothing is recording, `skipsProcessing` keeps about
+/// two frames of preview and screenshot work each second. Every buffer still
+/// advances frame timing so a stall can be detected. A recording is never skipped.
 final class StreamOutputAdapter: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private var latestPixelBuffer: CVPixelBuffer?
     private var pixelSize: CGSize?
@@ -790,6 +745,10 @@ final class StreamOutputAdapter: NSObject, AVCaptureVideoDataOutputSampleBufferD
     private weak var previewLayer: AVSampleBufferDisplayLayer?
     private var enqueuesPreview = true
     private var skipsProcessing = false
+    /// Spacing that yields about two processed frames per second while hidden.
+    /// Far below the 45s silence restart, so the cap is not treated as a stall.
+    private static let hiddenProcessInterval: TimeInterval = 0.5
+    private var lastProcessedAt: Date?
 
     /// Written on the main actor, read on the sample queue — guarded by `lock`.
     private var _recorder: VideoRecorder?
@@ -828,7 +787,7 @@ final class StreamOutputAdapter: NSObject, AVCaptureVideoDataOutputSampleBufferD
         lock.unlock()
     }
 
-    /// Main thread, or the session queue while the preview policy is applied.
+    /// Main thread. The sample queue reads the flag under `lock`.
     /// Ignored while a recorder is attached so a hide can't starve the file.
     func setSkipsProcessing(_ enabled: Bool) {
         lock.lock()
@@ -869,10 +828,16 @@ final class StreamOutputAdapter: NSObject, AVCaptureVideoDataOutputSampleBufferD
         guard sampleBuffer.isValid, let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
         lock.lock()
+        let now = Date()
         _frameCount += 1
-        _lastFrameAt = Date()
-        let skip = skipsProcessing && _recorder == nil
+        _lastFrameAt = now
+        let throttled = skipsProcessing && _recorder == nil
+        let withinHiddenInterval = lastProcessedAt.map {
+            now.timeIntervalSince($0) < Self.hiddenProcessInterval
+        } ?? false
+        let skip = throttled && withinHiddenInterval
         if !skip {
+            if throttled { lastProcessedAt = now }
             latestPixelBuffer = pixelBuffer
             pixelSize = CGSize(
                 width: CVPixelBufferGetWidth(pixelBuffer),
