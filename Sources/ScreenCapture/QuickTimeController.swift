@@ -2,12 +2,13 @@ import AppKit
 import ApplicationServices
 import OSLog
 
-/// Drives QuickTime Player's "Movie Recording" window on behalf of the app:
-/// opens it on demand, selects the right Apple TV source via the
-/// accessibility tree, detects error dialogs, and quits it for clean
-/// restarts. The Apple TV screen is invisible to public capture APIs —
-/// QuickTime's wireless screen-share is the only free software path — so we
-/// automate it instead of asking the user to click through it.
+/// Legacy QuickTime Player automation. The direct-feed capture path does
+/// not call this type: the Apple TV is opened as an `AVCaptureDevice`.
+/// Kept compiled so the old accessibility flow stays readable.
+///
+/// Drives QuickTime Player's "Movie Recording" window: opens it on demand,
+/// selects the right Apple TV source via the accessibility tree, detects
+/// error dialogs, and quits it for clean restarts.
 ///
 /// Deliberately uses NO Apple Events (TCC automation consent is unreliable
 /// for ad-hoc signed apps): the only permission needed is Accessibility,

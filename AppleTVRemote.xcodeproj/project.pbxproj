@@ -225,7 +225,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.mahmoudelgendy.AppleTVRemote;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mahmoudelgendy.AppleTVRemoteDirect;
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -377,7 +377,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.mahmoudelgendy.AppleTVRemote;
+				PRODUCT_BUNDLE_IDENTIFIER = com.mahmoudelgendy.AppleTVRemoteDirect;
 				SDKROOT = macosx;
 			};
 			name = Debug;

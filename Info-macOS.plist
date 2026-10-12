@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Apple TV Remote</string>
+	<string>Apple TV Remote Direct</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -35,6 +35,8 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Used to talk to the Apple TV control backend on your LAN.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Used to receive the Apple TV screen as a capture device for live preview, screenshots, and recordings.</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Used to capture screenshots and recordings of the Apple TV screen from QuickTime Player.</string>
 </dict>

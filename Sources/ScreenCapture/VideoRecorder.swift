@@ -2,9 +2,11 @@ import AVFoundation
 import CoreMedia
 import Foundation
 
-/// Wraps `AVAssetWriter` to turn a stream of `CMSampleBuffer` frames from
-/// ScreenCaptureKit into an MP4 on disk. Callers push frames from any queue
+/// Wraps `AVAssetWriter` to turn a stream of `CMSampleBuffer` frames into
+/// an MP4 on disk. Callers push frames from any queue
 /// (the internal serial queue linearises appends and lifecycle transitions).
+/// Presentation timestamps may be variable — the capture device runs at its
+/// native rate, and the writer drops buffers it cannot accept in time.
 final class VideoRecorder: @unchecked Sendable {
 
     private enum State { case ready, writing, finishing, finished }

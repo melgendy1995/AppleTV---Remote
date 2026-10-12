@@ -1,56 +1,54 @@
 import AppKit
 import AVFoundation
 import Combine
-import CoreGraphics
 import CoreImage
+import CoreMedia
+import CoreMediaIO
+import CoreVideo
 import Foundation
 import OSLog
-import ScreenCaptureKit
 
-/// Drives the ScreenCaptureKit pipeline that mirrors QuickTime Player's
-/// wireless Apple TV window into the app: a full-rate preview on an
-/// `AVSampleBufferDisplayLayer`, one-shot PNG screenshots, and MP4 recordings
-/// — all derived from the same `SCStream`.
+/// Mirrors the Apple TV by opening its CMIO screen-capture device with
+/// `AVCaptureSession`. QuickTime is not launched and ScreenCaptureKit is not
+/// used. The same sample buffers feed the `AVSampleBufferDisplayLayer`
+/// preview, PNG screenshots, and the MP4 recorder.
 ///
-/// A hidden, minimized, or occluded app window stops preview enqueue and,
-/// unless a recording is in progress, drops the same stream to 2 fps. The
-/// stream is not stopped or restarted; showing the window restores the
-/// original 30 fps configuration.
+/// The device delivers about 60 fps. `VideoRecorder` timestamps each buffer
+/// and drops frames when the writer is not ready, so the session keeps that
+/// native rate. There is no 30 fps cap.
 ///
-/// The Apple TV is invisible to public capture APIs, but the QuickTime window
-/// that displays it isn't; grabbing that window is our only realistic path.
+/// A hidden, minimized, or occluded window stops preview enqueue. Unless a
+/// recording is in progress, delivery also drops to 2 fps via
+/// `activeVideoMinFrameDuration` when that rate is in the active format's
+/// supported ranges. If the device refuses the cap, the sample delegate
+/// keeps frame timing and skips preview, screenshot, and recorder work.
+/// Recording always restores the native duration first and is never throttled.
 @MainActor
 final class CaptureCoordinator: NSObject, ObservableObject {
 
     // MARK: - Published state (consumed by ContentView)
 
     @Published private(set) var permissionGranted: Bool = false
-    @Published private(set) var quicktimeWindow: DetectedWindow?
+    /// `localizedName` of the capture device the session is aimed at.
+    @Published private(set) var captureDeviceName: String?
     @Published private(set) var isStreaming: Bool = false
     @Published private(set) var isRecording: Bool = false
     @Published private(set) var recordingElapsed: TimeInterval = 0
     @Published private(set) var recordingFileSize: UInt64 = 0
     @Published private(set) var lastCaptureURL: URL?
     @Published private(set) var lastError: String?
-    /// Name of the Apple TV the app is connected to. When set, the
-    /// coordinator owns the QuickTime lifecycle: it opens the Movie
-    /// Recording window, selects this device as the source, and restarts
-    /// QuickTime when the feed errors out.
+    /// Name of the Apple TV the app is connected to. Used to prefer a
+    /// capture device whose localized name matches.
     @Published private(set) var activeDeviceName: String?
-
-    struct DetectedWindow: Equatable {
-        let windowID: CGWindowID
-        let title: String
-        let pixelSize: CGSize
-    }
 
     // MARK: - Internals
 
     private let sampleQueue = DispatchQueue(label: "capture.samples", qos: .userInitiated)
-    private var stream: SCStream?
-    /// The configuration object passed to the running stream. Hidden-window
-    /// throttling changes only `minimumFrameInterval` on this instance.
-    private var streamConfig: SCStreamConfiguration?
+    private let sessionQueue = DispatchQueue(label: "capture.session", qos: .userInitiated)
+    private var session: AVCaptureSession?
+    private var videoOutput: AVCaptureVideoDataOutput?
+    private var captureDevice: AVCaptureDevice?
+    private var currentDeviceID: String?
     /// Not published. Frames go straight to the display layer; publishing the
     /// adapter or each frame would redraw ContentView at the capture rate.
     private(set) var streamOutput: StreamOutputAdapter?
@@ -58,52 +56,31 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     private var recordingTimer: Timer?
     private var recordingStartedAt: Date?
 
-    // MARK: - QuickTime automation state
-
-    private let qt = QuickTimeController()
+    private let discovery: AVCaptureDevice.DiscoverySession
     static let log = Logger(subsystem: "app.appletvremote", category: "capture")
-    /// Source we last selected in QuickTime's menu — avoids reopening the
-    /// menu (visible flicker) when it's already right.
-    private var lastSelectedSource: String?
-    /// After a sourceNotFound, wait this long before re-reading the menu.
-    private var nextSourceAttempt = Date.distantPast
-    /// Consecutive QuickTime restarts; capped at 2, then the coordinator
-    /// gives up until the device changes or the user hits refresh. Reset on
-    /// the first healthy frame.
-    private var recoveryAttempts = 0
-    private var gaveUp = false
-    /// Consecutive polls reporting the recording window missing — opening
-    /// QuickTime only happens after 2 confirmations, so a transient AX
-    /// hiccup never triggers a close/reopen cycle.
-    private var windowMissingPolls = 0
-    /// Consecutive openMovieRecording failures — capped at 2, then give up
-    /// (WITHOUT quitting QuickTime; a launch-in-progress AX hiccup is not a
-    /// reason to close the user's window).
-    private var openFailures = 0
-    /// Set once the app window has been brought to focus for the current
-    /// healthy feed; reset when the stream drops or the device changes so a
-    /// reconnect re-focuses.
+    /// Set once the app window has been brought forward for the current
+    /// healthy feed. Reset when the session stops or the device changes.
     private var didFocusOnConnect = false
-    /// When the current stream started — frames must arrive within a grace
-    /// period or the attempt counts as failed (static screens legitimately
-    /// produce no NEW frames, so staleness after the first frame is fine).
+    /// When the current session started. The device takes a few seconds to
+    /// deliver the first frame; silence inside that window is not a failure.
     private var streamStartedAt: Date?
+    /// Don't tight-loop session restarts when start fails or the feed is dead.
+    private var nextSessionAttempt = Date.distantPast
+    private var sessionWork: Task<Void, Never>?
+    private var lastPollNote = ""
 
     // MARK: - Preview visibility
 
-    /// Original capture rate. Restored verbatim when the window is shown or
-    /// a recording needs frames; width, height, and pixel format stay put.
-    private static let liveFrameInterval = CMTime(value: 1, timescale: 30)
-    /// 2 fps. Keeps the stream alive (and `lastFrameAt` moving) while the
-    /// preview is not on screen, without a stop/restart cycle.
+    /// 2 fps while the preview is off screen and nothing is recording.
+    /// Far below the 45s silence restart, so the cap is not treated as a stall.
     private static let hiddenFrameInterval = CMTime(value: 1, timescale: 2)
     private static let perfLog = Logger(subsystem: "com.mahmoudelgendy.AppleTVRemote", category: "perf")
 
-    private var previewObservers: [NSObjectProtocol] = []
+    private var lifetimeObservers: [NSObjectProtocol] = []
     private weak var previewWindow: NSWindow?
     /// Visible means not miniaturized, not app-hidden, and at least partly
     /// on screen. Unknown until a window exists — treated as visible so we
-    /// don't throttle the stream before the UI is up.
+    /// don't throttle before the UI is up.
     private var previewVisible = true
     private var previewThrottled = false
     private var loggedPreviewVisible = true
@@ -116,275 +93,83 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     // MARK: - Lifecycle
 
     override init() {
+        Self.enableCMIOCaptureDevices()
+        discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.external],
+            mediaType: nil,
+            position: .unspecified
+        )
         super.init()
-        permissionGranted = CGPreflightScreenCaptureAccess()
-        qt.restoreRecordingWindow()
+        permissionGranted = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
+        observeCaptureDevices()
+        observeSessionFailures()
         observePreviewVisibility()
     }
 
     deinit {
         let center = NotificationCenter.default
-        for token in previewObservers {
+        for token in lifetimeObservers {
             center.removeObserver(token)
         }
     }
 
-    /// Trigger the system prompt if we haven't been granted permission yet.
-    /// Returns true only after the user actually grants access.
+    /// Prompt for camera access when the system hasn't decided yet.
+    /// Returns true only when access is already granted.
     @discardableResult
     func ensurePermission() -> Bool {
-        if CGPreflightScreenCaptureAccess() {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
             permissionGranted = true
             return true
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.permissionGranted = granted
+                    if granted { await self.startIfPossible() }
+                }
+            }
+            return false
+        default:
+            permissionGranted = false
+            return false
         }
-        // This call prompts on first launch and returns immediately; the user
-        // grants in System Settings and must restart the app for it to stick.
-        _ = CGRequestScreenCaptureAccess()
-        permissionGranted = CGPreflightScreenCaptureAccess()
-        return permissionGranted
     }
 
-    /// Find the best QuickTime window that looks like an Apple TV capture and
-    /// start streaming from it. No-op if already streaming from the right one.
+    /// Open the best Apple TV capture device, or leave an already-healthy
+    /// session alone. Safe to call on a timer.
     func startIfPossible() async {
-        guard permissionGranted else {
-            Self.log.info("poll: screen-capture permission missing")
-            return
-        }
-        if let deviceName = activeDeviceName, !deviceName.isEmpty {
-            await startManaged(deviceName: deviceName)
-        } else {
-            Self.log.info("poll: unmanaged (no active device)")
-            await startUnmanaged()
+        await performSessionWork {
+            await self.startIfPossibleNow()
         }
     }
 
-    /// Last state summary logged — poll logs only on CHANGE to stay quiet
-    /// in steady state while still explaining what it's (not) doing.
-    private var lastPollNote = ""
-
-    fileprivate func pollNote(_ note: String) {
-        guard note != lastPollNote else { return }
-        lastPollNote = note
-        Self.log.info("poll: \(note, privacy: .public)")
-    }
-
-    /// Called when the backend connection changes: the screen must follow
-    /// the selected Apple TV. Resets recovery state so a device switch gets
-    /// a fresh set of attempts.
-    /// Called when the backend connection changes: the screen must follow
-    /// the selected Apple TV. A transition to nil means the connection was
-    /// lost — close QuickTime so the reconnect gets a completely fresh
-    /// screen-share session instead of a stale one.
+    /// Called when the backend connection changes. A different Apple TV
+    /// retargets the capture device; disconnect leaves the feed up when the
+    /// same CMIO device is still the best match.
     func setActiveDevice(name: String?) {
         guard name != activeDeviceName else { return }
-        let wasConnected = activeDeviceName != nil
         activeDeviceName = name
-        lastSelectedSource = nil
-        nextSourceAttempt = .distantPast
-        recoveryAttempts = 0
-        openFailures = 0
-        gaveUp = false
-        if name == nil && wasConnected {
-            Self.log.info("connection lost — closing QuickTime")
-            qt.quit()
-            quicktimeWindow = nil
-            Task { await stopStream() }
-        } else {
-            Task { await startIfPossible() }
-        }
+        didFocusOnConnect = false
+        Task { await startIfPossible() }
     }
 
-    /// Refresh-button action: resets the give-up flag and re-checks the
-    /// feed; the managed flow reopens/restarts only what's actually broken.
+    /// Refresh-button action. Restarts the capture session even if the same
+    /// device is already open.
     func refreshAndRecover() async {
-        recoveryAttempts = 0
-        openFailures = 0
-        gaveUp = false
-        await startIfPossible()
-    }
-
-    /// Legacy behavior when no device is connected: capture whatever
-    /// QuickTime window exists (manual QuickTime usage still works).
-    private func startUnmanaged() async {
-        do {
-            guard let window = try await findQuickTimeCaptureWindow() else {
-                quicktimeWindow = nil
-                await stopStream()
-                return
-            }
-            if let current = quicktimeWindow,
-               current.windowID == window.windowID,
-               isStreaming {
-                if (streamOutput?.frameCount ?? 0) > 0 {
-                    qt.parkRecordingWindowMostlyOffscreen()
-                }
-                return
-            }
-            Self.log.info("unmanaged: starting stream for window \(window.windowID)")
-            quicktimeWindow = DetectedWindow(
-                windowID: window.windowID,
-                title: window.title ?? "QuickTime",
-                pixelSize: CGSize(width: window.frame.width, height: window.frame.height)
-            )
-            try await startStream(for: window)
-        } catch {
-            lastError = "Capture setup failed: \(error.localizedDescription)"
-            await stopStream()
+        await performSessionWork {
+            self.nextSessionAttempt = .distantPast
+            await self.stopStream()
+            await self.startIfPossibleNow()
         }
-    }
-
-    /// Connected-device flow: the app owns QuickTime. Opens the Movie
-    /// Recording window, selects the connected Apple TV as the source, and
-    /// restarts QuickTime when the feed errors or never delivers frames.
-    private func startManaged(deviceName: String) async {
-        if gaveUp { return }
-        do {
-            // Already healthy? Leave QuickTime completely alone.
-            if isStreaming, (streamOutput?.frameCount ?? 0) > 0 {
-                pollNote("healthy")
-                recoveryAttempts = 0
-                if lastError != nil { lastError = nil }
-                // Frames are flowing, so the desktop-independent filter is
-                // live. Park after that — moving sooner would make a frozen
-                // feed look like QuickTime never connected.
-                qt.parkRecordingWindowMostlyOffscreen()
-                // The screen just came up — bring the remote forward so the
-                // user sees it (once per connect, not every poll).
-                if !didFocusOnConnect {
-                    didFocusOnConnect = true
-                    Self.log.info("screen connected — focusing app window")
-                    NSApp.activate(ignoringOtherApps: true)
-                    let win = NSApp.mainWindow ?? NSApp.windows.first
-                    win?.makeKeyAndOrderFront(nil)
-                    // Stays visible even if another app grabs focus right after.
-                    win?.orderFrontRegardless()
-                }
-                return
-            }
-            if qt.hasErrorDialog() {
-                await recoverQuickTime(reason: "QuickTime reported an error")
-                return
-            }
-            // Probe before acting: AX hiccups (`.unknown`) must not trigger
-            // open/close; only a window confirmed missing twice does.
-            switch qt.probeRecordingWindow() {
-            case .unknown:
-                pollNote("QuickTime probe failed (AX busy) — waiting")
-                return
-            case .present:
-                windowMissingPolls = 0
-                openFailures = 0
-            case .missing:
-                pollNote("recording window missing (\(self.windowMissingPolls + 1))")
-                windowMissingPolls += 1
-                guard windowMissingPolls >= 2 else { return }
-                windowMissingPolls = 0
-                Self.log.info("opening QuickTime movie recording for \(deviceName, privacy: .public)")
-                do {
-                    try await qt.openMovieRecording()
-                    openFailures = 0
-                } catch {
-                    // Opening can fail while QuickTime is still launching —
-                    // DON'T quit it (that's the open/close churn). Count
-                    // failures and give up after 2, leaving QuickTime alone.
-                    openFailures += 1
-                    Self.log.error("open failed (\(self.openFailures)/2): \(error.localizedDescription, privacy: .public)")
-                    if openFailures >= 2 {
-                        gaveUp = true
-                        lastError = "Couldn't open the Apple TV screen (\(error.localizedDescription)). Press ↻ to try again."
-                    } else {
-                        lastError = "Opening QuickTime failed — retrying…"
-                    }
-                    return
-                }
-            }
-            guard let window = try await findQuickTimeCaptureWindow() else {
-                Self.log.info("no QuickTime capture window yet")
-                quicktimeWindow = nil
-                await stopStream()
-                return
-            }
-            // Check what's currently selected (the menu reports the
-            // checkmark) and only press anything when it's the wrong device.
-            if lastSelectedSource != deviceName, Date() >= nextSourceAttempt {
-                nextSourceAttempt = Date().addingTimeInterval(30)
-                do {
-                    try await qt.selectScreenSource(named: deviceName)
-                    Self.log.info("selected source \(deviceName, privacy: .public)")
-                    lastSelectedSource = deviceName
-                } catch QuickTimeController.QuickTimeError.sourceNotFound {
-                    // TV not in the menu (asleep/off-network) — retry after
-                    // the cooldown, but never bounce QuickTime for this.
-                    Self.log.info("source \(deviceName, privacy: .public) not in QuickTime menu yet")
-                    lastError = QuickTimeController.QuickTimeError.sourceNotFound(deviceName).errorDescription
-                }
-            }
-            if !(quicktimeWindow?.windowID == window.windowID && isStreaming) {
-                quicktimeWindow = DetectedWindow(
-                    windowID: window.windowID,
-                    title: window.title ?? "QuickTime",
-                    pixelSize: CGSize(width: window.frame.width, height: window.frame.height)
-                )
-                Self.log.info("starting stream for window \(window.windowID)")
-                try await startStream(for: window)
-            }
-            // Health: a fresh stream must deliver a first frame within 15s.
-            // After that, no new frames just means a static screen.
-            if isStreaming, let started = streamStartedAt,
-               Date().timeIntervalSince(started) > 15,
-               (streamOutput?.frameCount ?? 0) == 0 {
-                await recoverQuickTime(reason: "no video from QuickTime")
-                return
-            }
-            // Freeze: the feed WAS delivering frames and then went silent
-            // for 45s (share session died, TV slept). Close QuickTime so the
-            // next poll opens a fresh session — a static-but-alive screen
-            // still emits frames from focus glow/screensaver, so 45s of
-            // total silence means the feed is dead.
-            // The hidden-window throttle is 2 fps, so lastFrameAt still
-            // advances about twice a second. 45s is far above that cadence
-            // and does not treat the throttle as a freeze.
-            if isStreaming, let lastFrame = streamOutput?.lastFrameAt,
-               Date().timeIntervalSince(lastFrame) > 45 {
-                Self.log.info("feed frozen — closing QuickTime for a fresh start")
-                lastSelectedSource = nil
-                qt.quit()
-                await stopStream()
-                return
-            }
-        } catch {
-            Self.log.error("managed capture failed: \(error.localizedDescription, privacy: .public)")
-            lastError = error.localizedDescription
-            await stopStream()
-        }
-    }
-
-    /// Recovery: close QuickTime and let the next poll reopen it — but only
-    /// 2 attempts per device/refresh, then stop and wait for the user.
-    private func recoverQuickTime(reason: String) async {
-        recoveryAttempts += 1
-        Self.log.info("recovering QuickTime (attempt \(self.recoveryAttempts)/2): \(reason, privacy: .public)")
-        lastSelectedSource = nil
-        if recoveryAttempts >= 2 {
-            gaveUp = true
-            lastError = "Couldn't get the Apple TV screen (\(reason)). Press ↻ to try again."
-        } else {
-            lastError = "Restarting QuickTime (\(reason))…"
-        }
-        qt.quit()
-        await stopStream()
     }
 
     func stop() async {
-        if isRecording { _ = await stopRecording() }
-        await stopStream()
-        quicktimeWindow = nil
-    }
-
-    /// Called on stream stop and on quit. Safe to call more than once.
-    func restoreParkedQuickTimeWindow() {
-        qt.restoreRecordingWindow()
+        await performSessionWork {
+            if self.isRecording { _ = await self.stopRecording() }
+            await self.stopStream()
+            self.captureDeviceName = nil
+        }
     }
 
     // MARK: - Screenshot
@@ -393,13 +178,12 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     /// `lastError` populated) if no frame is available yet.
     func captureScreenshot() async -> URL? {
         guard let pixelBuffer = streamOutput?.snapshotLatestPixelBuffer() else {
-            lastError = "No frame available yet — is QuickTime showing the Apple TV?"
+            lastError = "No frame available yet — is the Apple TV screen connected?"
             return nil
         }
         do {
             let dir = try CaptureStorage.captureDirectory()
             let url = dir.appendingPathComponent(CaptureStorage.filename(kind: "screenshot", ext: "png"))
-            // PNG encode + CI render off the main actor.
             try await Task.detached(priority: .userInitiated) {
                 try Self.writePNG(pixelBuffer: pixelBuffer, to: url)
             }.value
@@ -415,8 +199,8 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 
     func startRecording() async {
         guard isStreaming, !isRecording else { return }
-        // Full rate before the writer is attached. A hidden window must not
-        // leave the recording on the 2 fps throttle.
+        // Native rate before the writer is attached. A hidden window must
+        // not leave the recording on the 2 fps cap.
         recordingNeedsFullRate = true
         await applyPreviewDelivery()
         guard !previewThrottled else {
@@ -466,65 +250,334 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             self.recorder = nil
             url = nil
         }
-        // Window still hidden → back to 2 fps. A visible window stays at
-        // the original configuration.
+        // Window still hidden → back to 2 fps (or delegate skipping).
+        // A visible window stays at the device's native rate.
         await applyPreviewDelivery()
         return url
     }
 
-    // MARK: - Stream management
+    // MARK: - Session
 
-    private func startStream(for window: SCWindow) async throws {
-        await stopStream()
-
-        let scale = NSScreen.main?.backingScaleFactor ?? 2.0
-        let pixelWidth  = max(Int(window.frame.width  * scale), 640)
-        let pixelHeight = max(Int(window.frame.height * scale), 360)
-
-        let config = SCStreamConfiguration()
-        config.width = pixelWidth
-        config.height = pixelHeight
-        config.pixelFormat = kCVPixelFormatType_32BGRA
-        config.minimumFrameInterval = Self.liveFrameInterval
-        config.showsCursor = false
-        config.queueDepth = 5
-
-        let filter = SCContentFilter(desktopIndependentWindow: window)
-        let stream = SCStream(filter: filter, configuration: config, delegate: self)
-        let output = StreamOutputAdapter(pixelSize: CGSize(width: pixelWidth, height: pixelHeight))
-        if !previewVisible {
-            output.setEnqueuesPreview(false)
+    private func performSessionWork(_ work: @escaping @MainActor () async -> Void) async {
+        let previous = sessionWork
+        let next = Task { @MainActor in
+            await previous?.value
+            await work()
         }
-        try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: sampleQueue)
-        try await stream.startCapture()
+        sessionWork = next
+        await next.value
+    }
 
-        self.stream = stream
-        self.streamConfig = config
-        self.streamOutput = output
-        self.previewThrottled = false
+    private func startIfPossibleNow() async {
+        guard permissionGranted else {
+            pollNote("camera permission missing")
+            return
+        }
+        guard let device = bestCaptureDevice() else {
+            pollNote("no Apple TV capture device (\(self.discovery.devices.count) external)")
+            captureDeviceName = nil
+            if isStreaming { await stopStream() }
+            return
+        }
+        if isStreaming, currentDeviceID == device.uniqueID, session?.isRunning == true {
+            await maintainRunningSession(device: device)
+            return
+        }
+        await reopen(device: device)
+    }
+
+    private func maintainRunningSession(device: AVCaptureDevice) async {
+        let frames = streamOutput?.frameCount ?? 0
+        if frames > 0 {
+            if lastError != nil { lastError = nil }
+            focusAppWindowIfNeeded()
+            if let last = streamOutput?.lastFrameAt, Date().timeIntervalSince(last) > 45 {
+                Self.log.info("feed silent — restarting capture session")
+                await reopen(device: device)
+            } else {
+                pollNote("healthy")
+            }
+            return
+        }
+        guard let started = streamStartedAt, Date().timeIntervalSince(started) > 15 else {
+            pollNote("waiting for first frame from \(device.localizedName)")
+            return
+        }
+        pollNote("no frames — restarting")
+        await reopen(device: device)
+    }
+
+    private func reopen(device: AVCaptureDevice) async {
+        guard Date() >= nextSessionAttempt else { return }
+        nextSessionAttempt = Date().addingTimeInterval(2)
+        do {
+            try await openSession(device: device)
+            lastError = nil
+        } catch {
+            Self.log.error("capture start failed: \(error.localizedDescription, privacy: .public)")
+            lastError = error.localizedDescription
+            await stopStream()
+        }
+    }
+
+    private func openSession(device: AVCaptureDevice) async throws {
+        captureDeviceName = device.localizedName
+        await stopStream()
+        captureDeviceName = device.localizedName
+
+        let output = AVCaptureVideoDataOutput()
+        output.alwaysDiscardsLateVideoFrames = true
+        output.videoSettings = [
+            kCVPixelBufferPixelFormatTypeKey as String: NSNumber(value: kCVPixelFormatType_32BGRA),
+        ]
+        let adapter = StreamOutputAdapter()
+        if !previewVisible {
+            adapter.setEnqueuesPreview(false)
+        }
+        output.setSampleBufferDelegate(adapter, queue: sampleQueue)
+
+        let session = AVCaptureSession()
+        session.beginConfiguration()
+        let input = try AVCaptureDeviceInput(device: device)
+        guard session.canAddInput(input) else {
+            session.commitConfiguration()
+            throw Self.captureError("Can't open the Apple TV capture device.", code: 3)
+        }
+        session.addInput(input)
+        guard session.canAddOutput(output) else {
+            session.commitConfiguration()
+            throw Self.captureError("Can't read video from the Apple TV capture device.", code: 4)
+        }
+        session.addOutput(output)
+        Self.lockLargestVideoFormat(device)
+        session.commitConfiguration()
+
+        let running = await runOnSessionQueue { () -> Bool in
+            session.startRunning()
+            return session.isRunning
+        }
+        guard running else {
+            throw Self.captureError("Capture session did not start.", code: 5)
+        }
+
+        self.session = session
+        self.videoOutput = output
+        self.captureDevice = device
+        self.currentDeviceID = device.uniqueID
+        self.streamOutput = adapter
         self.streamStartedAt = Date()
+        self.previewThrottled = false
         self.isStreaming = true
+        Self.log.info("capture started \(device.localizedName, privacy: .public) model=\(device.modelID, privacy: .public)")
         await applyPreviewDelivery()
     }
 
     private func stopStream() async {
+        let session = self.session
+        let output = videoOutput
         isStreaming = false
         streamStartedAt = nil
         didFocusOnConnect = false
-        restoreParkedQuickTimeWindow()
-        if isRecording { _ = await stopRecording() }
-        if let stream {
-            try? await stream.stopCapture()
-        }
-        stream = nil
-        streamConfig = nil
-        streamOutput = nil
-        // Next startStream builds a fresh 30 fps config. Don't leave the
-        // flag set or the new stream would skip its first throttle update.
         previewThrottled = false
+        self.session = nil
+        self.videoOutput = nil
+        self.captureDevice = nil
+        currentDeviceID = nil
+        if isRecording { _ = await stopRecording() }
+        streamOutput = nil
+        output?.setSampleBufferDelegate(nil, queue: nil)
+        guard let session else { return }
+        await runOnSessionQueue {
+            if session.isRunning { session.stopRunning() }
+        }
+    }
+
+    /// Prefer the connected Apple TV's name, then any device whose name
+    /// contains "apple tv", then the first `modelID` of "iOS Device".
+    private func bestCaptureDevice() -> AVCaptureDevice? {
+        let devices = discovery.devices
+        let wanted = activeDeviceName?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if let wanted, !wanted.isEmpty {
+            if let exact = devices.first(where: { $0.localizedName.lowercased() == wanted }) {
+                return exact
+            }
+            if let partial = devices.first(where: { $0.localizedName.lowercased().contains(wanted) }) {
+                return partial
+            }
+        }
+        if let appleTV = devices.first(where: {
+            $0.localizedName.range(of: "apple tv", options: .caseInsensitive) != nil
+        }) {
+            return appleTV
+        }
+        return devices.first {
+            $0.modelID.range(of: "iOS Device", options: .caseInsensitive) != nil
+        }
+    }
+
+    private func captureDeviceChanged(_ note: Notification) {
+        let device = note.object as? AVCaptureDevice
+        if note.name == AVCaptureDevice.wasDisconnectedNotification, device?.uniqueID == currentDeviceID {
+            Self.log.info("capture device disconnected — restarting")
+            Task {
+                await self.performSessionWork {
+                    await self.stopStream()
+                    await self.startIfPossibleNow()
+                }
+            }
+            return
+        }
+        Self.log.info("capture device connected \(device?.localizedName ?? "?", privacy: .public)")
+        Task { await startIfPossible() }
+    }
+
+    private func sessionDidFail(_ note: Notification) {
+        guard let failed = note.object as? AVCaptureSession, failed === session else { return }
+        let message = (note.userInfo?[AVCaptureSessionErrorKey] as? Error)?.localizedDescription
+            ?? "Capture session failed."
+        Self.log.error("session runtime error: \(message, privacy: .public)")
+        lastError = message
+        Task {
+            await self.performSessionWork {
+                await self.stopStream()
+                await self.startIfPossibleNow()
+            }
+        }
+    }
+
+    private func focusAppWindowIfNeeded() {
+        guard !didFocusOnConnect else { return }
+        didFocusOnConnect = true
+        Self.log.info("screen connected — focusing app window")
+        NSApp.activate(ignoringOtherApps: true)
+        let win = NSApp.mainWindow ?? NSApp.windows.first
+        win?.makeKeyAndOrderFront(nil)
+        win?.orderFrontRegardless()
+    }
+
+    private func pollNote(_ note: String) {
+        guard note != lastPollNote else { return }
+        lastPollNote = note
+        Self.log.info("poll: \(note, privacy: .public)")
+    }
+
+    private func runOnSessionQueue<T>(_ body: @escaping () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            sessionQueue.async {
+                continuation.resume(returning: body())
+            }
+        }
+    }
+
+    // MARK: - CMIO + format
+
+    /// Same two flags QuickTime sets so wireless Apple TV devices show up
+    /// in `AVCaptureDevice.DiscoverySession`.
+    private static func enableCMIOCaptureDevices() {
+        setCMIOFlag(
+            CMIOObjectPropertySelector(kCMIOHardwarePropertyAllowScreenCaptureDevices),
+            name: "AllowScreenCaptureDevices"
+        )
+        setCMIOFlag(
+            CMIOObjectPropertySelector(kCMIOHardwarePropertyAllowWirelessScreenCaptureDevices),
+            name: "AllowWirelessScreenCaptureDevices"
+        )
+    }
+
+    private static func setCMIOFlag(_ selector: CMIOObjectPropertySelector, name: String) {
+        var address = CMIOObjectPropertyAddress(
+            mSelector: selector,
+            mScope: CMIOObjectPropertyScope(kCMIOObjectPropertyScopeGlobal),
+            mElement: CMIOObjectPropertyElement(kCMIOObjectPropertyElementMain)
+        )
+        var allow: UInt32 = 1
+        let status = CMIOObjectSetPropertyData(
+            CMIOObjectID(kCMIOObjectSystemObject),
+            &address,
+            0,
+            nil,
+            UInt32(MemoryLayout<UInt32>.size),
+            &allow
+        )
+        if status == 0 {
+            log.info("CMIO \(name, privacy: .public)=1")
+        } else {
+            log.error("CMIO \(name, privacy: .public) OSStatus \(status, privacy: .public)")
+        }
+    }
+
+    /// Full native resolution: the largest video format the device lists.
+    /// When the device only advertises muxed formats (the verified Apple TV
+    /// path), leave the default — that default is the 1920×1080 feed.
+    private static func lockLargestVideoFormat(_ device: AVCaptureDevice) {
+        guard let format = largestVideoFormat(on: device) else {
+            log.info("no video format listed — leaving the device format unchanged")
+            return
+        }
+        do {
+            try device.lockForConfiguration()
+        } catch {
+            log.error("format lock failed: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        device.activeFormat = format
+        device.unlockForConfiguration()
+        let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+        log.info("capture format \(dims.width, privacy: .public)x\(dims.height, privacy: .public)")
+    }
+
+    private static func largestVideoFormat(on device: AVCaptureDevice) -> AVCaptureDevice.Format? {
+        var best: (AVCaptureDevice.Format, Int32)?
+        for format in device.formats {
+            let desc = format.formatDescription
+            guard CMFormatDescriptionGetMediaType(desc) == kCMMediaType_Video else { continue }
+            let dims = CMVideoFormatDescriptionGetDimensions(desc)
+            let area = dims.width * dims.height
+            if area > (best?.1 ?? 0) {
+                best = (format, area)
+            }
+        }
+        return best?.0
+    }
+
+    private static func captureError(_ message: String, code: Int) -> NSError {
+        NSError(domain: "CaptureCoordinator", code: code, userInfo: [
+            NSLocalizedDescriptionKey: message,
+        ])
     }
 
     // MARK: - Preview visibility
+
+    private func observeCaptureDevices() {
+        let names = [
+            AVCaptureDevice.wasConnectedNotification,
+            AVCaptureDevice.wasDisconnectedNotification,
+        ]
+        let center = NotificationCenter.default
+        for name in names {
+            let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                MainActor.assumeIsolated {
+                    self?.captureDeviceChanged(note)
+                }
+            }
+            lifetimeObservers.append(token)
+        }
+    }
+
+    private func observeSessionFailures() {
+        let token = NotificationCenter.default.addObserver(
+            forName: .AVCaptureSessionRuntimeError,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            MainActor.assumeIsolated {
+                self?.sessionDidFail(note)
+            }
+        }
+        lifetimeObservers.append(token)
+    }
 
     private func observePreviewVisibility() {
         let names: [Notification.Name] = [
@@ -541,7 +594,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
                     self?.previewVisibilityChanged(note)
                 }
             }
-            previewObservers.append(token)
+            lifetimeObservers.append(token)
         }
     }
 
@@ -582,7 +635,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     }
 
     /// Serializes interval updates. Visibility notifications, recording
-    /// start/stop, and stream start can overlap across awaits.
+    /// start/stop, and session start can overlap across awaits.
     private func applyPreviewDelivery() async {
         let previous = previewDeliveryChain
         let next = Task { @MainActor in
@@ -596,28 +649,78 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     private func deliverPreviewPolicy() async {
         let visible = previewVisible
         streamOutput?.setEnqueuesPreview(visible)
-        guard isStreaming, let stream, let streamConfig else {
+        guard isStreaming, captureDevice != nil else {
             logPreviewDeliveryIfChanged()
             return
         }
-        let throttle = !visible && !isRecording && !recordingNeedsFullRate
-        guard throttle != previewThrottled else {
-            logPreviewDeliveryIfChanged()
-            return
+        let slowDown = !visible && !isRecording && !recordingNeedsFullRate
+        if slowDown {
+            previewThrottled = await slowHiddenDelivery()
+        } else {
+            let restored = await restoreFullDelivery()
+            previewThrottled = !restored
         }
-        // Same configuration object the stream was started with. Only the
-        // frame interval changes; width, height, and pixel format stay.
-        streamConfig.minimumFrameInterval = throttle ? Self.hiddenFrameInterval : Self.liveFrameInterval
-        do {
-            try await stream.updateConfiguration(streamConfig)
-        } catch {
-            Self.log.error("preview frame interval update failed: \(error.localizedDescription, privacy: .public)")
-            logPreviewDeliveryIfChanged()
-            return
-        }
-        guard self.stream === stream else { return }
-        previewThrottled = throttle
+        guard isStreaming else { return }
         logPreviewDeliveryIfChanged()
+    }
+
+    /// Device accepted 2 fps, or the delegate will skip work instead.
+    private func slowHiddenDelivery() async -> Bool {
+        guard let device = captureDevice else { return false }
+        let adapter = streamOutput
+        let limited = await runOnSessionQueue {
+            Self.limitFrameRateForHiddenPreview(device: device)
+        }
+        adapter?.setSkipsProcessing(!limited)
+        return true
+    }
+
+    /// `false` only when a duration was previously written and could not be cleared.
+    private func restoreFullDelivery() async -> Bool {
+        guard let device = captureDevice else { return true }
+        let adapter = streamOutput
+        let restored = await runOnSessionQueue {
+            Self.restoreNativeFrameRate(device: device)
+        }
+        adapter?.setSkipsProcessing(false)
+        return restored
+    }
+
+    private static func limitFrameRateForHiddenPreview(device: AVCaptureDevice) -> Bool {
+        // Automatic frame-rate mode throws if a duration is set. The caller
+        // then skips buffers in the delegate instead.
+        if #available(macOS 15.0, *), device.isAutoVideoFrameRateEnabled { return false }
+        guard supportsLockedFrameRate(2, device: device) else { return false }
+        return setFrameDuration(hiddenFrameInterval, on: device)
+    }
+
+    private static func restoreNativeFrameRate(device: AVCaptureDevice) -> Bool {
+        // Nothing to undo when the device owns its frame rate — the hidden
+        // path never wrote a duration in that mode.
+        if #available(macOS 15.0, *), device.isAutoVideoFrameRateEnabled { return true }
+        return setFrameDuration(.invalid, on: device)
+    }
+
+    /// `kCMTimeInvalid` is the documented reset. Any other value must already
+    /// have been checked against `videoSupportedFrameRateRanges`; an
+    /// unsupported duration raises an Objective-C exception.
+    private static func setFrameDuration(_ interval: CMTime, on device: AVCaptureDevice) -> Bool {
+        do {
+            try device.lockForConfiguration()
+        } catch {
+            log.error("frame-rate lock failed: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+        device.activeVideoMinFrameDuration = interval
+        device.activeVideoMaxFrameDuration = interval
+        device.unlockForConfiguration()
+        return true
+    }
+
+    private static func supportsLockedFrameRate(_ rate: Double, device: AVCaptureDevice) -> Bool {
+        device.activeFormat.videoSupportedFrameRateRanges.contains { range in
+            range.minFrameRate <= rate && rate <= range.maxFrameRate
+        }
     }
 
     private func logPreviewDeliveryIfChanged() {
@@ -627,27 +730,6 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         let visible = previewVisible ? "true" : "false"
         let throttled = previewThrottled ? "true" : "false"
         Self.perfLog.notice("preview visible=\(visible, privacy: .public) throttled=\(throttled, privacy: .public)")
-    }
-
-    // MARK: - Discovery
-
-    /// The QuickTime "Movie Recording" window is the largest window owned by
-    /// QuickTime Player that isn't a toolbar or inspector. We prefer a window
-    /// actually titled "Movie Recording" (so a stray movie-playback window
-    /// isn't grabbed), then fall back to the largest plausible candidate.
-    private func findQuickTimeCaptureWindow() async throws -> SCWindow? {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-        let qtWindows = content.windows.filter { w in
-            guard let bundle = w.owningApplication?.bundleIdentifier else { return false }
-            return bundle == "com.apple.QuickTimePlayerX"
-        }
-        // Prefer sensibly-sized recording windows (16:9 area heuristic)
-        // over floating palettes/inspectors that QuickTime spawns.
-        let candidates = qtWindows.filter { $0.frame.width >= 320 && $0.frame.height >= 180 }
-        if let recording = candidates.first(where: { $0.title == "Movie Recording" }) {
-            return recording
-        }
-        return candidates.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
     }
 
     // MARK: - Recording timer
@@ -679,7 +761,6 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 
     private static nonisolated func writePNG(pixelBuffer: CVPixelBuffer, to url: URL) throws {
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        // One-shot context — this runs on a background thread (Task.detached).
         guard let cg = CIContext(options: [.useSoftwareRenderer: false])
             .createCGImage(ciImage, from: ciImage.extent) else {
             throw NSError(domain: "CaptureCoordinator", code: 1,
@@ -694,39 +775,33 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     }
 }
 
-// MARK: - SCStreamDelegate
+// MARK: - Sample buffer adapter
 
-extension CaptureCoordinator: SCStreamDelegate {
-    nonisolated func stream(_ stream: SCStream, didStopWithError error: Error) {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            // Don't let a recording dangle after the stream dies.
-            if self.isRecording { _ = await self.stopRecording() }
-            self.isStreaming = false
-            self.lastError = "Stream stopped: \(error.localizedDescription)"
-        }
-    }
-}
-
-// MARK: - Stream output adapter (background queue → coordinator)
-
-/// Splits incoming sample buffers into the live preview layer and the
+/// Splits incoming camera sample buffers into the live preview layer and the
 /// recorder. Retains only the latest pixel buffer for screenshots.
 /// The display layer is not published; SwiftUI never sees individual frames.
-/// Preview enqueue pauses while the app window is not visible; frame
-/// accounting, the screenshot buffer, and the recorder do not.
-final class StreamOutputAdapter: NSObject, SCStreamOutput {
-    private(set) var currentPixelSize: CGSize
+/// Preview enqueue pauses while the app window is not visible. While the
+/// window is hidden and nothing is recording, `skipsProcessing` drops the
+/// buffer work; frame timing still advances so a stall can be detected.
+final class StreamOutputAdapter: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private var latestPixelBuffer: CVPixelBuffer?
+    private var pixelSize: CGSize?
     private let lock = NSLock()
     private weak var previewLayer: AVSampleBufferDisplayLayer?
     private var enqueuesPreview = true
+    private var skipsProcessing = false
 
     /// Written on the main actor, read on the sample queue — guarded by `lock`.
     private var _recorder: VideoRecorder?
     var recorder: VideoRecorder? {
         get { lock.lock(); defer { lock.unlock() }; return _recorder }
         set { lock.lock(); _recorder = newValue; lock.unlock() }
+    }
+
+    /// Latest frame dimensions. Nil until a buffer has been processed.
+    var currentPixelSize: CGSize? {
+        lock.lock(); defer { lock.unlock() }
+        return pixelSize
     }
 
     /// Main-thread only. The sample queue reads the layer under `lock`.
@@ -753,8 +828,12 @@ final class StreamOutputAdapter: NSObject, SCStreamOutput {
         lock.unlock()
     }
 
-    init(pixelSize: CGSize) {
-        self.currentPixelSize = pixelSize
+    /// Main thread, or the session queue while the preview policy is applied.
+    /// Ignored while a recorder is attached so a hide can't starve the file.
+    func setSkipsProcessing(_ enabled: Bool) {
+        lock.lock()
+        skipsProcessing = enabled
+        lock.unlock()
     }
 
     /// Thread-safe copy of the most recent buffer for one-shot screenshots.
@@ -763,9 +842,7 @@ final class StreamOutputAdapter: NSObject, SCStreamOutput {
         return latestPixelBuffer
     }
 
-    /// Total complete frames received since this adapter was created (i.e.
-    /// since the current stream started). Zero after a grace period means the
-    /// capture attempt failed — a static screen later on is NOT a failure.
+    /// Total complete frames received since this adapter was created.
     var frameCount: Int {
         lock.lock(); defer { lock.unlock() }
         return _frameCount
@@ -775,31 +852,34 @@ final class StreamOutputAdapter: NSObject, SCStreamOutput {
     private var perfIntervalStartCount = 0
     private static let perfLog = Logger(subsystem: "com.mahmoudelgendy.AppleTVRemote", category: "perf")
 
-    /// When the most recent complete frame arrived. A feed that delivered
-    /// frames and then goes silent for a long stretch is frozen (share
-    /// session died, TV slept) — the coordinator restarts QuickTime then.
+    /// When the most recent frame arrived. A feed that delivered frames and
+    /// then goes silent for a long stretch is dead — the coordinator
+    /// restarts the capture session then.
     var lastFrameAt: Date? {
         lock.lock(); defer { lock.unlock() }
         return _lastFrameAt
     }
     private var _lastFrameAt: Date?
 
-    func stream(_ stream: SCStream,
-                didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
-                of type: SCStreamOutputType) {
-        guard type == .screen, sampleBuffer.isValid else { return }
-        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
-              let first = attachments.first,
-              let statusRaw = first[.status] as? Int,
-              let status = SCFrameStatus(rawValue: statusRaw),
-              status == .complete else { return }
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+    func captureOutput(
+        _ output: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from connection: AVCaptureConnection
+    ) {
+        guard sampleBuffer.isValid, let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
         lock.lock()
-        latestPixelBuffer = pixelBuffer
         _frameCount += 1
         _lastFrameAt = Date()
-        let layer = enqueuesPreview ? previewLayer : nil
+        let skip = skipsProcessing && _recorder == nil
+        if !skip {
+            latestPixelBuffer = pixelBuffer
+            pixelSize = CGSize(
+                width: CVPixelBufferGetWidth(pixelBuffer),
+                height: CVPixelBufferGetHeight(pixelBuffer)
+            )
+        }
+        let layer = (!skip && enqueuesPreview) ? previewLayer : nil
         let perfDue = Date().timeIntervalSince(perfIntervalStart) >= 10
         let framesInInterval: Int
         if perfDue {
@@ -813,8 +893,8 @@ final class StreamOutputAdapter: NSObject, SCStreamOutput {
         if perfDue {
             Self.perfLog.notice("frames \(framesInInterval, privacy: .public) in 10s")
         }
+        guard !skip else { return }
 
-        // Recorder sees the original ScreenCaptureKit buffer, unmodified.
         recorder?.append(sampleBuffer: sampleBuffer)
         enqueuePreview(sampleBuffer, on: layer)
     }

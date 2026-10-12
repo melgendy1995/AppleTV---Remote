@@ -8,15 +8,19 @@ keyboard) is done by a **FastAPI + pyatv** Python backend under `Vendor/backend/
 app bundles (embedded Python 3.12 in `Vendor/python/`) and spawns automatically via
 `BackendController`. They talk over REST (`/api/*`) + one WebSocket (`/ws/state`).
 
-It also mirrors the Apple TV's screen: ScreenCaptureKit captures the QuickTime Player
-"Movie Recording" window (the only public API path to wireless-Apple-TV frames) into a live
-preview, PNG screenshots, and MP4 recordings (`Sources/ScreenCapture/`). QuickTime is
-driven automatically (`QuickTimeController.swift`): on connect the app opens the recording
-window and selects the connected TV via the accessibility tree (needs the Accessibility
-TCC grant — deliberately NOT Apple Events, whose consent prompt never appears for this
-self-signed app). QuickTime rejects AX while busy/launching (`kAXErrorCannotComplete`),
-so all state probes are three-state (present/missing/unknown) and recovery never quits
-QuickTime on a failed open; real restarts are capped at 2 per device/refresh.
+It also mirrors the Apple TV's screen on the `feat/direct-feed` variant: at launch the
+app sets CMIO `AllowScreenCaptureDevices` and `AllowWirelessScreenCaptureDevices`, then
+opens the Apple TV as an external `AVCaptureDevice` (localized name like "apple tv",
+modelID "iOS Device", muxed) with `AVCaptureSession` + `AVCaptureVideoDataOutput`
+(32BGRA). That feed drives the live preview, PNG screenshots, and MP4 recordings
+(`Sources/ScreenCapture/CaptureCoordinator.swift`). QuickTime is not launched.
+`QuickTimeController.swift` stays in the target but is not on the active path.
+The direct-feed app uses bundle ID `com.mahmoudelgendy.AppleTVRemoteDirect` so it can
+be installed beside the QuickTime-based build. Camera usage (not Screen Recording) is
+the TCC prompt. The session keeps the device's native frame rate (~60 fps);
+`VideoRecorder` timestamps frames and drops when the writer is busy. A hidden window
+stops preview enqueue and, unless recording, caps the device at 2 fps when that rate
+is supported, otherwise the sample delegate skips buffer work.
 
 Repo root = this directory (`swift-app/`). Default branch: `main`. Releases are GitHub
 releases, tags `vX.Y.Z`, zip asset `AppleTVRemote-X.Y.Z.zip` + `INSTALL.md`.
@@ -34,9 +38,8 @@ Sources/
 │   ├── BackendClient.swift     # @MainActor REST+WS client; auto-connect, dedupe, refresh/reconnect
 │   └── BackendController.swift # spawns bundled uvicorn on a free port; .failed state must persist
 ├── ScreenCapture/
-│   ├── CaptureCoordinator.swift# SCStream lifecycle, preview throttle, screenshot, recording;
-│   │                           #  managed QuickTime flow (probe → open → select source → stream)
-│   ├── QuickTimeController.swift# AX-driven QuickTime automation (open/select source/health)
+│   ├── CaptureCoordinator.swift# AVCaptureSession lifecycle, preview throttle, screenshot, recording
+│   ├── QuickTimeController.swift# legacy AX QuickTime automation; not called by the direct feed
 │   └── VideoRecorder.swift     # AVAssetWriter wrapper (serial queue, @unchecked Sendable)
 └── Views/
     ├── Theme.swift             # black palette + liquid-glass helpers (glassCard/glassCapsule/…)
@@ -90,9 +93,10 @@ project.pbxproj). The app is not notarized; INSTALL.md tells users to strip quar
   device UUID in credential field 3 — reuse `physicalKey`/`dedupedSavedDevices`, don't re-list raw.
 - **Auto-connect**: after every scan, connect to the first discovered paired device unless the
   user manually disconnected (suppress flag) or a previous attempt failed <60s ago.
-- **Capture**: preview render/PNG encode stay off-main (10 fps coalesced in the adapter).
-  Never take the app window real fullscreen to "give the stream space" — fullscreen moves the app
-  to its own Space, the QuickTime window gets occluded, and the capture freezes.
+- **Capture**: preview enqueue and PNG encode stay off the main actor. The sample
+  adapter keeps the device's native rate; it does not coalesce to 10 fps. Hiding the
+  window stops preview enqueue and, unless a recording is running, slows or skips
+  frames. Recording always uses the native rate. The sidebar collapse is not fullscreen.
 - **Backend**: no CORS middleware (intentional — native client only, `allow_origins=["*"]` let any
   website drive the TV). Async tasks go through `manager._spawn()` (strong refs). Credentials are
   written atomically (`os.replace`); corrupt files are backed up, never silently overwritten.

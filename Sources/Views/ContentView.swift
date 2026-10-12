@@ -2,7 +2,7 @@ import AppKit
 import AVFoundation
 import SwiftUI
 
-/// Cinema layout: the QuickTime capture stream fills the left stage; a compact
+/// Cinema layout: the Apple TV capture feed fills the left stage; a compact
 /// sidebar on the right holds status, the remote controls, and capture actions.
 struct ContentView: View {
     @EnvironmentObject private var client: BackendClient
@@ -48,7 +48,7 @@ struct ContentView: View {
         .onDisappear { stopCapturePolling() }
         .onChange(of: client.keyboard) { _, new in handleKeyboardChange(new) }
         // The screen follows the selected Apple TV: connecting (or switching)
-        // a device retargets the QuickTime source automatically.
+        // a device retargets the capture device automatically.
         .onChange(of: client.connectedDevice) { _, device in
             capture.setActiveDevice(name: device?.name)
         }
@@ -99,40 +99,36 @@ struct ContentView: View {
     private var stagePlaceholder: some View {
         VStack(spacing: 10) {
             if !capture.permissionGranted {
-                Text("Screen Recording permission required")
+                Text("Camera permission required")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(Theme.text)
-                Text("Grant access in System Settings → Privacy & Security → Screen & System Audio Recording, then restart the app.")
+                Text("The Apple TV screen arrives as a capture device. Grant access in System Settings → Privacy & Security → Camera, then retry.")
                     .font(.system(size: 12))
                     .foregroundColor(Theme.muted)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 380)
-                Button("Open Settings") {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                Button("Allow Camera") {
+                    if AVCaptureDevice.authorizationStatus(for: .video) != .notDetermined,
+                       let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera") {
                         NSWorkspace.shared.open(url)
                     }
                     capture.ensurePermission()
                 }
                 .buttonStyle(SurfaceButton())
                 .frame(width: 180)
-            } else if capture.quicktimeWindow == nil {
+            } else if capture.captureDeviceName == nil {
                 Text("Waiting for the Apple TV screen")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(Theme.text)
                 Text(client.connected
-                     ? "QuickTime is being opened and pointed at \(client.connectedDevice?.name ?? "your Apple TV") automatically…"
+                     ? "Looking for \(client.connectedDevice?.name ?? "your Apple TV") as a capture device…"
                      : "Connect to an Apple TV (⋮ menu) and its screen will appear here automatically.")
                     .font(.system(size: 12))
                     .foregroundColor(Theme.muted)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 380)
-                Button("Open QuickTime Manually") {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/QuickTime Player.app"))
-                }
-                .buttonStyle(SurfaceButton())
-                .frame(width: 200)
             } else {
-                Text("Connecting to \(capture.quicktimeWindow?.title ?? "QuickTime")…")
+                Text("Connecting to \(capture.captureDeviceName ?? "Apple TV")…")
                     .font(.system(size: 12))
                     .foregroundColor(Theme.muted)
             }
@@ -225,9 +221,7 @@ struct ContentView: View {
     }
 
     /// Collapse the remote sidebar so the capture stream fills the whole
-    /// window. Deliberately does NOT enter real fullscreen: fullscreen moves
-    /// the app to its own Space, which occludes the QuickTime window being
-    /// captured and freezes the stream.
+    /// window. This does not enter macOS fullscreen.
     private func setRemoteHidden(_ hidden: Bool) {
         withAnimation(.easeInOut(duration: 0.25)) { sidebarHidden = hidden }
     }
@@ -303,7 +297,7 @@ struct ContentView: View {
             while !Task.isCancelled {
                 await capture.startIfPossible()
                 // Healthy means a frame has already arrived. Until then the
-                // poll is what opens QuickTime and starts the stream.
+                // poll is what opens the capture device and starts the session.
                 let streamingHealthy = capture.isStreaming && (capture.streamOutput?.frameCount ?? 0) > 0
                 let pauseNs: UInt64 = streamingHealthy ? 5_000_000_000 : 2_000_000_000
                 try? await Task.sleep(nanoseconds: pauseNs)

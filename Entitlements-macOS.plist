@@ -18,5 +18,9 @@
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
+    <!-- Hardened runtime (codesign --options runtime) requires this to open
+         the Apple TV screen-capture device. The app is not sandboxed. -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
 </dict>
 </plist>

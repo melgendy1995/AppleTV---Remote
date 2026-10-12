@@ -35,7 +35,7 @@ swift-app/
 │   │   ├── BackendClient.swift       # REST + WebSocket client (@MainActor ObservableObject)
 │   │   └── BackendController.swift   # spawns/monitors the bundled Python backend
 │   ├── ScreenCapture/
-│   │   ├── CaptureCoordinator.swift  # ScreenCaptureKit pipeline: preview, screenshot, recording
+│   │   ├── CaptureCoordinator.swift  # AVCaptureSession pipeline: preview, screenshot, recording
 │   │   └── VideoRecorder.swift       # AVAssetWriter wrapper for MP4 recordings
 │   └── Views/
 │       ├── Theme.swift               # black palette + liquid-glass helpers + button styles
@@ -130,7 +130,7 @@ Then set the backend URL from the gear icon in the app. Default is
   window-level key monitor so they work even with the remote sidebar hidden.
 - **Hideable remote** — `»` collapses the sidebar so the capture stream fills the
   window; `«` restores it.
-- **Screen capture** — live preview of the Apple TV via QuickTime + ScreenCaptureKit,
+- **Screen capture** — live preview of the Apple TV via its AVCaptureDevice feed,
   with screenshots (`S`) and MP4 recording (`R`, live timer + file size); saved files
   are revealed in Finder. Files land in `~/Downloads/AppleTV Captures/`.
 - **Live now-playing** — title/artist/album/app, position, volume, and artwork,

@@ -31,7 +31,7 @@ targets:
     info:
       path: Info-macOS.plist
       properties:
-        CFBundleDisplayName: Apple TV Remote
+        CFBundleDisplayName: Apple TV Remote Direct
         LSApplicationCategoryType: public.app-category.utilities
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: YES
@@ -39,9 +39,10 @@ targets:
         NSLocalNetworkUsageDescription: "Used to talk to the Apple TV control backend on your LAN."
         NSBonjourServices:
           - "_http._tcp"
+        NSCameraUsageDescription: "Used to receive the Apple TV screen as a capture device for live preview, screenshots, and recordings."
         NSScreenCaptureUsageDescription: "Used to capture screenshots and recordings of the Apple TV screen from QuickTime Player."
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.mahmoudelgendy.AppleTVRemote
+        PRODUCT_BUNDLE_IDENTIFIER: com.mahmoudelgendy.AppleTVRemoteDirect
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_ENTITLEMENTS: Entitlements-macOS.plist

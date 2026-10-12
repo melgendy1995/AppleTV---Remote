@@ -50,9 +50,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        MainActor.assumeIsolated {
-            self.capture?.restoreParkedQuickTimeWindow()
-        }
         backend?.stop()
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
     }
