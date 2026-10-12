@@ -12,6 +12,11 @@ import ScreenCaptureKit
 /// `AVSampleBufferDisplayLayer`, one-shot PNG screenshots, and MP4 recordings
 /// — all derived from the same `SCStream`.
 ///
+/// A hidden, minimized, or occluded app window stops preview enqueue and,
+/// unless a recording is in progress, drops the same stream to 2 fps. The
+/// stream is not stopped or restarted; showing the window restores the
+/// original 30 fps configuration.
+///
 /// The Apple TV is invisible to public capture APIs, but the QuickTime window
 /// that displays it isn't; grabbing that window is our only realistic path.
 @MainActor
@@ -43,6 +48,9 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 
     private let sampleQueue = DispatchQueue(label: "capture.samples", qos: .userInitiated)
     private var stream: SCStream?
+    /// The configuration object passed to the running stream. Hidden-window
+    /// throttling changes only `minimumFrameInterval` on this instance.
+    private var streamConfig: SCStreamConfiguration?
     /// Not published. Frames go straight to the display layer; publishing the
     /// adapter or each frame would redraw ContentView at the capture rate.
     private(set) var streamOutput: StreamOutputAdapter?
@@ -81,12 +89,44 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     /// produce no NEW frames, so staleness after the first frame is fine).
     private var streamStartedAt: Date?
 
+    // MARK: - Preview visibility
+
+    /// Original capture rate. Restored verbatim when the window is shown or
+    /// a recording needs frames; width, height, and pixel format stay put.
+    private static let liveFrameInterval = CMTime(value: 1, timescale: 30)
+    /// 2 fps. Keeps the stream alive (and `lastFrameAt` moving) while the
+    /// preview is not on screen, without a stop/restart cycle.
+    private static let hiddenFrameInterval = CMTime(value: 1, timescale: 2)
+    private static let perfLog = Logger(subsystem: "com.mahmoudelgendy.AppleTVRemote", category: "perf")
+
+    private var previewObservers: [NSObjectProtocol] = []
+    private weak var previewWindow: NSWindow?
+    /// Visible means not miniaturized, not app-hidden, and at least partly
+    /// on screen. Unknown until a window exists — treated as visible so we
+    /// don't throttle the stream before the UI is up.
+    private var previewVisible = true
+    private var previewThrottled = false
+    private var loggedPreviewVisible = true
+    private var loggedPreviewThrottled = false
+    /// Set for the whole recording-start attempt. Otherwise a hide that
+    /// lands while `isRecording` is still false would pin the file at 2 fps.
+    private var recordingNeedsFullRate = false
+    private var previewDeliveryChain: Task<Void, Never>?
+
     // MARK: - Lifecycle
 
     override init() {
         super.init()
         permissionGranted = CGPreflightScreenCaptureAccess()
         qt.restoreRecordingWindow()
+        observePreviewVisibility()
+    }
+
+    deinit {
+        let center = NotificationCenter.default
+        for token in previewObservers {
+            center.removeObserver(token)
+        }
     }
 
     /// Trigger the system prompt if we haven't been granted permission yet.
@@ -302,6 +342,9 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             // next poll opens a fresh session — a static-but-alive screen
             // still emits frames from focus glow/screensaver, so 45s of
             // total silence means the feed is dead.
+            // The hidden-window throttle is 2 fps, so lastFrameAt still
+            // advances about twice a second. 45s is far above that cadence
+            // and does not treat the throttle as a freeze.
             if isStreaming, let lastFrame = streamOutput?.lastFrameAt,
                Date().timeIntervalSince(lastFrame) > 45 {
                 Self.log.info("feed frozen — closing QuickTime for a fresh start")
@@ -372,8 +415,18 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 
     func startRecording() async {
         guard isStreaming, !isRecording else { return }
+        // Full rate before the writer is attached. A hidden window must not
+        // leave the recording on the 2 fps throttle.
+        recordingNeedsFullRate = true
+        await applyPreviewDelivery()
+        guard !previewThrottled else {
+            recordingNeedsFullRate = false
+            lastError = "Couldn't restore full frame rate for recording."
+            return
+        }
         guard let size = streamOutput?.currentPixelSize else {
             lastError = "Recording needs at least one frame first."
+            await endFullRateHold()
             return
         }
         do {
@@ -383,6 +436,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             self.recorder = recorder
             streamOutput?.recorder = recorder
             isRecording = true
+            recordingNeedsFullRate = false
             recordingElapsed = 0
             recordingFileSize = 0
             startRecordingTimer()
@@ -392,6 +446,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             recordingStartedAt = Date()
         } catch {
             lastError = "Recording start failed: \(error.localizedDescription)"
+            await endFullRateHold()
         }
     }
 
@@ -401,16 +456,20 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         streamOutput?.recorder = nil
         stopRecordingTimer()
         isRecording = false
+        let url: URL?
         do {
-            let url = try await recorder.finish()
+            url = try await recorder.finish()
             self.recorder = nil
             lastCaptureURL = url
-            return url
         } catch {
             lastError = "Recording finalize failed: \(error.localizedDescription)"
             self.recorder = nil
-            return nil
+            url = nil
         }
+        // Window still hidden → back to 2 fps. A visible window stays at
+        // the original configuration.
+        await applyPreviewDelivery()
+        return url
     }
 
     // MARK: - Stream management
@@ -426,20 +485,26 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         config.width = pixelWidth
         config.height = pixelHeight
         config.pixelFormat = kCVPixelFormatType_32BGRA
-        config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+        config.minimumFrameInterval = Self.liveFrameInterval
         config.showsCursor = false
         config.queueDepth = 5
 
         let filter = SCContentFilter(desktopIndependentWindow: window)
         let stream = SCStream(filter: filter, configuration: config, delegate: self)
         let output = StreamOutputAdapter(pixelSize: CGSize(width: pixelWidth, height: pixelHeight))
+        if !previewVisible {
+            output.setEnqueuesPreview(false)
+        }
         try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: sampleQueue)
         try await stream.startCapture()
 
         self.stream = stream
+        self.streamConfig = config
         self.streamOutput = output
+        self.previewThrottled = false
         self.streamStartedAt = Date()
         self.isStreaming = true
+        await applyPreviewDelivery()
     }
 
     private func stopStream() async {
@@ -452,7 +517,116 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             try? await stream.stopCapture()
         }
         stream = nil
+        streamConfig = nil
         streamOutput = nil
+        // Next startStream builds a fresh 30 fps config. Don't leave the
+        // flag set or the new stream would skip its first throttle update.
+        previewThrottled = false
+    }
+
+    // MARK: - Preview visibility
+
+    private func observePreviewVisibility() {
+        let names: [Notification.Name] = [
+            NSWindow.didChangeOcclusionStateNotification,
+            NSWindow.didMiniaturizeNotification,
+            NSWindow.didDeminiaturizeNotification,
+            NSApplication.didHideNotification,
+            NSApplication.didUnhideNotification,
+        ]
+        let center = NotificationCenter.default
+        for name in names {
+            let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                MainActor.assumeIsolated {
+                    self?.previewVisibilityChanged(note)
+                }
+            }
+            previewObservers.append(token)
+        }
+    }
+
+    private func previewVisibilityChanged(_ note: Notification) {
+        if let window = note.object as? NSWindow {
+            guard adoptPreviewWindow(window) else { return }
+        }
+        if previewWindow == nil {
+            previewWindow = NSApp.mainWindow
+        }
+        let visible = currentPreviewVisibility()
+        guard visible != previewVisible else { return }
+        previewVisible = visible
+        Task { await applyPreviewDelivery() }
+    }
+
+    /// Latches the app's content window. Later notifications from sheets
+    /// or panels must not retarget it.
+    private func adoptPreviewWindow(_ window: NSWindow) -> Bool {
+        if let previewWindow {
+            return window === previewWindow
+        }
+        if window.isSheet || !window.canBecomeMain { return false }
+        if let main = NSApp.mainWindow, window !== main { return false }
+        previewWindow = window
+        return true
+    }
+
+    private func currentPreviewVisibility() -> Bool {
+        if NSApp.isHidden { return false }
+        guard let window = previewWindow else { return true }
+        return !window.isMiniaturized && window.occlusionState.contains(.visible)
+    }
+
+    private func endFullRateHold() async {
+        recordingNeedsFullRate = false
+        await applyPreviewDelivery()
+    }
+
+    /// Serializes interval updates. Visibility notifications, recording
+    /// start/stop, and stream start can overlap across awaits.
+    private func applyPreviewDelivery() async {
+        let previous = previewDeliveryChain
+        let next = Task { @MainActor in
+            await previous?.value
+            await self.deliverPreviewPolicy()
+        }
+        previewDeliveryChain = next
+        await next.value
+    }
+
+    private func deliverPreviewPolicy() async {
+        let visible = previewVisible
+        streamOutput?.setEnqueuesPreview(visible)
+        guard isStreaming, let stream, let streamConfig else {
+            logPreviewDeliveryIfChanged()
+            return
+        }
+        let throttle = !visible && !isRecording && !recordingNeedsFullRate
+        guard throttle != previewThrottled else {
+            logPreviewDeliveryIfChanged()
+            return
+        }
+        // Same configuration object the stream was started with. Only the
+        // frame interval changes; width, height, and pixel format stay.
+        streamConfig.minimumFrameInterval = throttle ? Self.hiddenFrameInterval : Self.liveFrameInterval
+        do {
+            try await stream.updateConfiguration(streamConfig)
+        } catch {
+            Self.log.error("preview frame interval update failed: \(error.localizedDescription, privacy: .public)")
+            logPreviewDeliveryIfChanged()
+            return
+        }
+        guard self.stream === stream else { return }
+        previewThrottled = throttle
+        logPreviewDeliveryIfChanged()
+    }
+
+    private func logPreviewDeliveryIfChanged() {
+        guard loggedPreviewVisible != previewVisible || loggedPreviewThrottled != previewThrottled else { return }
+        loggedPreviewVisible = previewVisible
+        loggedPreviewThrottled = previewThrottled
+        let visible = previewVisible ? "true" : "false"
+        let throttled = previewThrottled ? "true" : "false"
+        Self.perfLog.notice("preview visible=\(visible, privacy: .public) throttled=\(throttled, privacy: .public)")
     }
 
     // MARK: - Discovery
@@ -539,11 +713,14 @@ extension CaptureCoordinator: SCStreamDelegate {
 /// Splits incoming sample buffers into the live preview layer and the
 /// recorder. Retains only the latest pixel buffer for screenshots.
 /// The display layer is not published; SwiftUI never sees individual frames.
+/// Preview enqueue pauses while the app window is not visible; frame
+/// accounting, the screenshot buffer, and the recorder do not.
 final class StreamOutputAdapter: NSObject, SCStreamOutput {
     private(set) var currentPixelSize: CGSize
     private var latestPixelBuffer: CVPixelBuffer?
     private let lock = NSLock()
     private weak var previewLayer: AVSampleBufferDisplayLayer?
+    private var enqueuesPreview = true
 
     /// Written on the main actor, read on the sample queue — guarded by `lock`.
     private var _recorder: VideoRecorder?
@@ -556,6 +733,23 @@ final class StreamOutputAdapter: NSObject, SCStreamOutput {
     func attachPreviewLayer(_ layer: AVSampleBufferDisplayLayer?) {
         lock.lock()
         previewLayer = layer
+        lock.unlock()
+    }
+
+    /// Main thread. Turning enqueue back on flushes first so a renderer that
+    /// failed while frames were dropped doesn't stay stuck.
+    func setEnqueuesPreview(_ enabled: Bool) {
+        lock.lock()
+        let turningOn = enabled && !enqueuesPreview
+        let layer = previewLayer
+        if !enabled {
+            enqueuesPreview = false
+        }
+        lock.unlock()
+        guard turningOn else { return }
+        layer?.sampleBufferRenderer.flush()
+        lock.lock()
+        enqueuesPreview = true
         lock.unlock()
     }
 
@@ -605,7 +799,7 @@ final class StreamOutputAdapter: NSObject, SCStreamOutput {
         latestPixelBuffer = pixelBuffer
         _frameCount += 1
         _lastFrameAt = Date()
-        let layer = previewLayer
+        let layer = enqueuesPreview ? previewLayer : nil
         let perfDue = Date().timeIntervalSince(perfIntervalStart) >= 10
         let framesInInterval: Int
         if perfDue {
@@ -625,8 +819,9 @@ final class StreamOutputAdapter: NSObject, SCStreamOutput {
         enqueuePreview(sampleBuffer, on: layer)
     }
 
-    /// Every complete frame, at the stream's existing rate. The renderer
-    /// retains the sample buffer and composites its IOSurface; no CPU readback.
+    /// The renderer retains the sample buffer and composites its IOSurface;
+    /// no CPU readback. A nil layer is the suspended preview — nothing is
+    /// enqueued, and the caller has already counted the frame.
     private func enqueuePreview(_ sampleBuffer: CMSampleBuffer, on layer: AVSampleBufferDisplayLayer?) {
         guard let layer else { return }
         let renderer = layer.sampleBufferRenderer
