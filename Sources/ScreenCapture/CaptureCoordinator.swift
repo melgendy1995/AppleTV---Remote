@@ -31,7 +31,10 @@ enum CapturePreviewMode: String {
 /// delegate to `previewFPS` (UserDefaults, 30 or 60, default 30). In
 /// `previewLayer` mode the preview connection's `videoMinFrameDuration` is
 /// set only when `isVideoMinFrameDurationSupported` says so; if that is
-/// unsupported or throws, the preview stays at the device rate.
+/// unsupported or throws, the preview stays at the device rate. When
+/// UserDefaults `dataOutputFrameLimit` is true (default false), the same
+/// guard sets the video-data-output connection to 1/`previewFPS` after that
+/// output is added. Software decimation is unchanged.
 ///
 /// `previewLayer` does not run `AVCaptureVideoDataOutput` while only the
 /// preview is showing. The output is added for a recording, and for one
@@ -101,6 +104,9 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     static let previewFPSDefaultsKey = "previewFPS"
     static let capturePixelFormatDefaultsKey = "capturePixelFormat"
     static let previewModeDefaultsKey = "previewMode"
+    /// Off unless set. Read when the session starts and when the data output
+    /// is attached. Does not change device frame durations.
+    static let dataOutputFrameLimitDefaultsKey = "dataOutputFrameLimit"
     /// 30 or 60. Pushed into the live sample adapter; not a session rebuild.
     private var previewFPS = 30
     /// Latched when a session opens. `2vuy` or `420v`. `native` is stored as
@@ -141,6 +147,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             Self.previewFPSDefaultsKey: 30,
             Self.capturePixelFormatDefaultsKey: "2vuy",
             Self.previewModeDefaultsKey: CapturePreviewMode.sampleBuffer.rawValue,
+            Self.dataOutputFrameLimitDefaultsKey: false,
         ])
         previewFPS = Self.clampedPreviewFPS(UserDefaults.standard.integer(forKey: Self.previewFPSDefaultsKey))
         observeCaptureDevices()
@@ -514,6 +521,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
                 throw Self.captureError("Can't read video from the Apple TV capture device.", code: 4)
             }
             session.addOutput(output)
+            applyDataOutputFrameLimit(output)
         }
         Self.lockLargestVideoFormat(device)
         session.commitConfiguration()
@@ -634,6 +642,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             Self.log.error("video data output was refused")
             return false
         }
+        applyDataOutputFrameLimit(output)
         sampleOutputAttached = true
         frameWatchBaseline = streamOutput?.frameCount ?? 0
         frameWatchStartedAt = Date()
@@ -676,7 +685,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     }
 
     /// Device `activeVideoMinFrameDuration` throws on this muxed CMIO device.
-    /// Only the preview connection is attempted, and only inside the ObjC guard.
+    /// The preview connection is attempted only inside the ObjC guard.
     private func applyPreviewLayerFrameRate() {
         guard latchedPreviewMode == .previewLayer, !previewRateUnavailable,
               let connection = hostedPreviewLayer?.connection else { return }
@@ -694,6 +703,23 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         @unknown default:
             previewRateUnavailable = true
         }
+    }
+
+    /// `dataOutputFrameLimit` is read here, at session start or when the data
+    /// output is attached. The device's active min/max frame durations are
+    /// never written. Software decimation in the sample delegate stays as it is.
+    private func applyDataOutputFrameLimit(_ output: AVCaptureVideoDataOutput) {
+        guard UserDefaults.standard.bool(forKey: Self.dataOutputFrameLimitDefaultsKey) else { return }
+        let duration = CMTime(value: 1, timescale: CMTimeScale(previewFPS))
+        var failure: NSString?
+        let result = CaptureSetVideoMinFrameDuration(
+            output.connection(with: .video),
+            duration,
+            &failure
+        )
+        let applied = result == .applied
+        let error = (failure as String?) ?? (applied ? "" : "unsupported")
+        Self.perfLog.notice("data output frame limit applied=\(applied ? "true" : "false", privacy: .public) fps=\(self.previewFPS, privacy: .public) error=\(error, privacy: .public)")
     }
 
     private func updatePreviewHeartbeat() {
