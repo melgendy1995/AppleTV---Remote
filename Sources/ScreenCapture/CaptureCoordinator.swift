@@ -8,23 +8,38 @@ import CoreVideo
 import Foundation
 import OSLog
 
+enum CapturePreviewMode: String {
+    case previewLayer
+    case sampleBuffer
+}
+
 /// Mirrors the Apple TV by opening its CMIO screen-capture device with
 /// `AVCaptureSession`. QuickTime is not launched and ScreenCaptureKit is not
-/// used. The same sample buffers feed the `AVSampleBufferDisplayLayer`
-/// preview, PNG screenshots, and the MP4 recorder.
+/// used. PNG screenshots and the MP4 recorder share the sample buffers.
+/// The preview is either an `AVCaptureVideoPreviewLayer` (`previewMode` =
+/// `previewLayer`, the default) or the sample-buffer layer (`sampleBuffer`).
+///
+/// CMIO screen-capture flags and the capture session stay off until
+/// `BackendClient` reports a connection. Disconnect stops the session and
+/// removes the device input. The next connect builds a new session and reads
+/// `capturePixelFormat` and `previewMode` again.
 ///
 /// The device delivers about 60 fps and rejects `activeVideoMinFrameDuration`
-/// / `activeVideoMaxFrameDuration` (muxed-only, no frame-rate ranges). Preview
-/// and recording share a software decimation to `previewFPS` (UserDefaults,
-/// 30 or 60, default 30): a buffer is kept when its presentation timestamp is
-/// at least `1/fps` minus a small tolerance after the last kept buffer.
-/// Changing the default applies on the next buffer; the session is not rebuilt.
+/// / `activeVideoMaxFrameDuration` (muxed-only, no frame-rate ranges). Those
+/// device properties are never written. Recording decimates in the sample
+/// delegate to `previewFPS` (UserDefaults, 30 or 60, default 30). In
+/// `previewLayer` mode the preview connection's `videoMinFrameDuration` is
+/// set only when `isVideoMinFrameDurationSupported` says so; if that is
+/// unsupported or throws, the preview stays at the device rate.
 ///
-/// A hidden, minimized, or occluded window stops preview enqueue. Unless a
-/// recording is in progress, the sample delegate also limits preview and
-/// screenshot work to about two frames each second. Every buffer still
-/// advances frame timing. Recording receives the kept frames, including while
-/// the window is hidden.
+/// `previewLayer` does not run `AVCaptureVideoDataOutput` while only the
+/// preview is showing. The output is added for a recording, and for one
+/// frame when a screenshot is requested. A hidden window disables the
+/// preview connection instead of stopping the session: `stopRunning` drops
+/// the wireless device and the next picture takes seconds, while re-enabling
+/// the connection shows the next frame. `sampleBuffer` mode still pauses
+/// preview enqueue when hidden and, unless a recording is running, skips
+/// most buffers down to about 2 fps.
 @MainActor
 final class CaptureCoordinator: NSObject, ObservableObject {
 
@@ -48,6 +63,8 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     private let sampleQueue = DispatchQueue(label: "capture.samples", qos: .userInitiated)
     private let sessionQueue = DispatchQueue(label: "capture.session", qos: .userInitiated)
     private var session: AVCaptureSession?
+    /// Session the preview layer attaches to. Set while `isStreaming` is true.
+    private(set) var previewSession: AVCaptureSession?
     private var videoOutput: AVCaptureVideoDataOutput?
     private var captureDevice: AVCaptureDevice?
     private var currentDeviceID: String?
@@ -58,7 +75,13 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     private var recordingTimer: Timer?
     private var recordingStartedAt: Date?
 
-    private let discovery: AVCaptureDevice.DiscoverySession
+    /// Created only after the CMIO screen-capture flags are enabled, which
+    /// happens on the first backend connection — not at launch.
+    private var discovery: AVCaptureDevice.DiscoverySession?
+    private var cmioCaptureEnabled = false
+    /// False until BackendClient reports an Apple TV connection. Gates CMIO
+    /// flags and `startRunning`.
+    private var backendLinkUp = false
     static let log = Logger(subsystem: "app.appletvremote", category: "capture")
     /// Set once the app window has been brought forward for the current
     /// healthy feed. Reset when the session stops or the device changes.
@@ -75,8 +98,24 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 
     private static let perfLog = Logger(subsystem: "com.mahmoudelgendy.AppleTVRemote", category: "perf")
     static let previewFPSDefaultsKey = "previewFPS"
+    static let capturePixelFormatDefaultsKey = "capturePixelFormat"
+    static let previewModeDefaultsKey = "previewMode"
     /// 30 or 60. Pushed into the live sample adapter; not a session rebuild.
     private var previewFPS = 30
+    /// Latched when a session opens. `native` writes an empty `videoSettings`
+    /// dictionary so the device format (2vuy on this Apple TV) passes through.
+    private(set) var latchedPixelFormat = "native"
+    private(set) var latchedPreviewMode: CapturePreviewMode = .previewLayer
+    /// True only while the video data output is in the running session.
+    /// Preview-layer streaming leaves it false.
+    private var sampleOutputAttached = false
+    private var frameWatchBaseline = 0
+    private var frameWatchStartedAt: Date?
+    private weak var hostedPreviewLayer: AVCaptureVideoPreviewLayer?
+    private var wantPreviewConnection = true
+    private var appliedPreviewDuration: CMTime = .invalid
+    private var previewRateUnavailable = false
+    private var previewHeartbeat: Timer?
 
     private var lifetimeObservers: [NSObjectProtocol] = []
     private weak var previewWindow: NSWindow?
@@ -95,15 +134,13 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     // MARK: - Lifecycle
 
     override init() {
-        Self.enableCMIOCaptureDevices()
-        discovery = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.external],
-            mediaType: nil,
-            position: .unspecified
-        )
         super.init()
         permissionGranted = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
-        UserDefaults.standard.register(defaults: [Self.previewFPSDefaultsKey: 30])
+        UserDefaults.standard.register(defaults: [
+            Self.previewFPSDefaultsKey: 30,
+            Self.capturePixelFormatDefaultsKey: "native",
+            Self.previewModeDefaultsKey: CapturePreviewMode.previewLayer.rawValue,
+        ])
         previewFPS = Self.clampedPreviewFPS(UserDefaults.standard.integer(forKey: Self.previewFPSDefaultsKey))
         observeCaptureDevices()
         observeSessionFailures()
@@ -116,6 +153,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         for token in lifetimeObservers {
             center.removeObserver(token)
         }
+        previewHeartbeat?.invalidate()
     }
 
     /// Prompt for camera access when the system hasn't decided yet.
@@ -149,14 +187,49 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         }
     }
 
-    /// Called when the backend connection changes. A different Apple TV
-    /// retargets the capture device; disconnect leaves the feed up when the
-    /// same CMIO device is still the best match.
-    func setActiveDevice(name: String?) {
-        guard name != activeDeviceName else { return }
+    /// Backend connection gate. CMIO flags and the capture session start only
+    /// while `connected` is true. Disconnect stops the session and drops the
+    /// device input. A nil name while a link is already up is the brief clear
+    /// inside `BackendClient.connect`; it is not a disconnect.
+    func updateBackendLink(connected: Bool, deviceName: String?) {
+        if !connected {
+            guard backendLinkUp || isStreaming || session != nil else { return }
+            backendLinkUp = false
+            activeDeviceName = nil
+            didFocusOnConnect = false
+            captureDeviceName = nil
+            lastError = nil
+            Task { await self.performSessionWork { await self.stopStream() } }
+            return
+        }
+        let trimmed = deviceName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty, backendLinkUp { return }
+        let name = trimmed.isEmpty ? nil : trimmed
+        let becameConnected = !backendLinkUp
+        let nameChanged = name != activeDeviceName
+        backendLinkUp = true
         activeDeviceName = name
-        didFocusOnConnect = false
-        Task { await startIfPossible() }
+        guard becameConnected || nameChanged else { return }
+        if becameConnected { didFocusOnConnect = false }
+        Task { await self.startIfPossible() }
+    }
+
+    /// True when the on-screen feed is up. Preview-layer mode has no sample
+    /// buffers until a recording or screenshot asks for one.
+    var feedIsHealthy: Bool {
+        guard isStreaming, session?.isRunning == true else { return false }
+        if latchedPreviewMode == .previewLayer, !sampleOutputAttached { return true }
+        return (streamOutput?.frameCount ?? 0) > frameWatchBaseline
+    }
+
+    /// Called by the preview host when its backing layer is the capture preview.
+    func notePreviewLayer(_ layer: AVCaptureVideoPreviewLayer?) {
+        if hostedPreviewLayer !== layer {
+            hostedPreviewLayer = layer
+            appliedPreviewDuration = .invalid
+        }
+        applyPreviewConnectionState()
+        applyPreviewLayerFrameRate()
     }
 
     /// Refresh-button action. Restarts the capture session even if the same
@@ -180,12 +253,45 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     // MARK: - Screenshot
 
     /// Convert the latest received frame to a PNG on disk. Returns nil (with
-    /// `lastError` populated) if no frame is available yet.
+    /// `lastError` populated) if no frame is available yet. Preview-layer mode
+    /// adds the data output for the first new frame, then removes it.
     func captureScreenshot() async -> URL? {
+        if latchedPreviewMode == .previewLayer, !sampleOutputAttached {
+            return await captureScreenshotFromTemporaryOutput()
+        }
+        if streamOutput?.snapshotLatestPixelBuffer() == nil {
+            let baseline = streamOutput?.processedCount ?? 0
+            _ = await waitForProcessedFrame(after: baseline, timeout: 5)
+        }
         guard let pixelBuffer = streamOutput?.snapshotLatestPixelBuffer() else {
-            lastError = "No frame available yet — is the Apple TV screen connected?"
+            lastError = Self.noFrameMessage
             return nil
         }
+        return await writeScreenshot(pixelBuffer)
+    }
+
+    private func captureScreenshotFromTemporaryOutput() async -> URL? {
+        let baseline = streamOutput?.processedCount ?? 0
+        guard await attachSampleOutput() else {
+            lastError = Self.noFrameMessage
+            return nil
+        }
+        let arrived = await waitForProcessedFrame(after: baseline, timeout: 5)
+        let pixelBuffer = arrived ? streamOutput?.snapshotLatestPixelBuffer() : nil
+        // Encode while the output still owns the buffer. Removing the output
+        // first can recycle the IOSurface out from under the PNG write.
+        let saved: URL?
+        if let pixelBuffer {
+            saved = await writeScreenshot(pixelBuffer)
+        } else {
+            lastError = Self.noFrameMessage
+            saved = nil
+        }
+        if !isRecording { await detachSampleOutput() }
+        return saved
+    }
+
+    private func writeScreenshot(_ pixelBuffer: CVPixelBuffer) async -> URL? {
         do {
             let dir = try CaptureStorage.captureDirectory()
             let url = dir.appendingPathComponent(CaptureStorage.filename(kind: "screenshot", ext: "png"))
@@ -214,15 +320,24 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             lastError = "Couldn't restore full frame rate for recording."
             return
         }
-        guard let size = streamOutput?.currentPixelSize else {
+        if latchedPreviewMode == .previewLayer, !sampleOutputAttached {
+            guard await attachSampleOutputForRecording() else { return }
+        }
+        guard isStreaming, backendLinkUp, let size = streamOutput?.currentPixelSize else {
             lastError = "Recording needs at least one frame first."
+            if latchedPreviewMode == .previewLayer { await detachSampleOutput() }
             await endFullRateHold()
             return
         }
         do {
             let dir = try CaptureStorage.captureDirectory()
             let url = dir.appendingPathComponent(CaptureStorage.filename(kind: "recording", ext: "mp4"))
-            let recorder = try VideoRecorder(url: url, pixelSize: size, framesPerSecond: previewFPS)
+            let recorder = try VideoRecorder(
+                url: url,
+                pixelSize: size,
+                framesPerSecond: previewFPS,
+                sourceFormatHint: streamOutput?.sourceFormatHint()
+            )
             self.recorder = recorder
             streamOutput?.recorder = recorder
             isRecording = true
@@ -236,8 +351,26 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             recordingStartedAt = Date()
         } catch {
             lastError = "Recording start failed: \(error.localizedDescription)"
+            if latchedPreviewMode == .previewLayer { await detachSampleOutput() }
             await endFullRateHold()
         }
+    }
+
+    private func attachSampleOutputForRecording() async -> Bool {
+        let baseline = streamOutput?.processedCount ?? 0
+        guard await attachSampleOutput() else {
+            lastError = "Couldn't read frames for recording."
+            await endFullRateHold()
+            return false
+        }
+        guard await waitForProcessedFrame(after: baseline, timeout: 5),
+              isStreaming, backendLinkUp else {
+            lastError = "Recording needs at least one frame first."
+            await detachSampleOutput()
+            await endFullRateHold()
+            return false
+        }
+        return true
     }
 
     @discardableResult
@@ -255,6 +388,12 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             lastError = "Recording finalize failed: \(error.localizedDescription)"
             self.recorder = nil
             url = nil
+        }
+        // Preview-layer mode has no sample stream except while recording
+        // or grabbing a screenshot. Sample-buffer mode keeps the session's
+        // output and only changes the software cap below.
+        if latchedPreviewMode == .previewLayer {
+            await detachSampleOutput()
         }
         // Window still hidden → software ~2 fps for preview work.
         // A visible window keeps the selected previewFPS.
@@ -275,12 +414,19 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     }
 
     private func startIfPossibleNow() async {
+        guard backendLinkUp else {
+            pollNote("waiting for Apple TV connection")
+            if isStreaming || session != nil { await stopStream() }
+            return
+        }
         guard permissionGranted else {
             pollNote("camera permission missing")
             return
         }
+        prepareDiscoveryIfNeeded()
         guard let device = bestCaptureDevice() else {
-            pollNote("no Apple TV capture device (\(self.discovery.devices.count) external)")
+            let count = discovery?.devices.count ?? 0
+            pollNote("no Apple TV capture device (\(count) external)")
             captureDeviceName = nil
             if isStreaming { await stopStream() }
             return
@@ -293,7 +439,13 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     }
 
     private func maintainRunningSession(device: AVCaptureDevice) async {
-        let frames = streamOutput?.frameCount ?? 0
+        if latchedPreviewMode == .previewLayer, !sampleOutputAttached {
+            if lastError != nil { lastError = nil }
+            focusAppWindowIfNeeded()
+            pollNote("healthy")
+            return
+        }
+        let frames = (streamOutput?.frameCount ?? 0) - frameWatchBaseline
         if frames > 0 {
             if lastError != nil { lastError = nil }
             focusAppWindowIfNeeded()
@@ -305,7 +457,8 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             }
             return
         }
-        guard let started = streamStartedAt, Date().timeIntervalSince(started) > 15 else {
+        let started = frameWatchStartedAt ?? streamStartedAt
+        guard let started, Date().timeIntervalSince(started) > 15 else {
             pollNote("waiting for first frame from \(device.localizedName)")
             return
         }
@@ -329,16 +482,22 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     private func openSession(device: AVCaptureDevice) async throws {
         captureDeviceName = device.localizedName
         await stopStream()
+        guard backendLinkUp else {
+            captureDeviceName = nil
+            return
+        }
         captureDeviceName = device.localizedName
+        latchSessionDefaults()
 
         let output = AVCaptureVideoDataOutput()
         output.alwaysDiscardsLateVideoFrames = true
         let adapter = StreamOutputAdapter()
         adapter.setPreviewFPS(previewFPS)
-        if !previewVisible {
+        if !previewVisible || latchedPreviewMode == .previewLayer {
             adapter.setEnqueuesPreview(false)
         }
         output.setSampleBufferDelegate(adapter, queue: sampleQueue)
+        Self.applyRequestedPixelFormat(output, choice: latchedPixelFormat)
 
         let session = AVCaptureSession()
         session.beginConfiguration()
@@ -348,13 +507,14 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             throw Self.captureError("Can't open the Apple TV capture device.", code: 3)
         }
         session.addInput(input)
-        guard session.canAddOutput(output) else {
-            session.commitConfiguration()
-            throw Self.captureError("Can't read video from the Apple TV capture device.", code: 4)
+        if latchedPreviewMode == .sampleBuffer {
+            guard session.canAddOutput(output) else {
+                session.commitConfiguration()
+                throw Self.captureError("Can't read video from the Apple TV capture device.", code: 4)
+            }
+            session.addOutput(output)
         }
-        session.addOutput(output)
         Self.lockLargestVideoFormat(device)
-        Self.applyDisplayPixelFormat(output)
         session.commitConfiguration()
 
         let running = await runOnSessionQueue { () -> Bool in
@@ -365,42 +525,200 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             throw Self.captureError("Capture session did not start.", code: 5)
         }
 
+        let started = Date()
         self.session = session
+        self.previewSession = session
         self.videoOutput = output
         self.captureDevice = device
         self.currentDeviceID = device.uniqueID
         self.streamOutput = adapter
-        self.streamStartedAt = Date()
+        self.streamStartedAt = started
+        self.frameWatchStartedAt = started
+        self.frameWatchBaseline = 0
+        self.sampleOutputAttached = latchedPreviewMode == .sampleBuffer
         self.previewThrottled = false
         self.isStreaming = true
-        Self.log.info("capture started \(device.localizedName, privacy: .public) model=\(device.modelID, privacy: .public)")
+        Self.log.info("capture started \(device.localizedName, privacy: .public) model=\(device.modelID, privacy: .public) preview=\(self.latchedPreviewMode.rawValue, privacy: .public) pixels=\(self.latchedPixelFormat, privacy: .public)")
         await applyPreviewDelivery()
+        updatePreviewHeartbeat()
+        if latchedPreviewMode == .previewLayer {
+            focusAppWindowIfNeeded()
+        }
+    }
+
+    /// `capturePixelFormat` and `previewMode` are read here, when the session
+    /// is built, so a defaults change applies on the next connect without a rebuild.
+    private func latchSessionDefaults() {
+        latchedPixelFormat = Self.resolvedPixelFormat(
+            UserDefaults.standard.string(forKey: Self.capturePixelFormatDefaultsKey)
+        )
+        latchedPreviewMode = Self.resolvedPreviewMode(
+            UserDefaults.standard.string(forKey: Self.previewModeDefaultsKey)
+        )
+        previewRateUnavailable = false
+        appliedPreviewDuration = .invalid
     }
 
     private func stopStream() async {
         let session = self.session
         let output = videoOutput
         isStreaming = false
+        previewSession = nil
         streamStartedAt = nil
+        frameWatchStartedAt = nil
         didFocusOnConnect = false
         previewThrottled = false
+        sampleOutputAttached = false
         self.session = nil
         self.videoOutput = nil
         self.captureDevice = nil
         currentDeviceID = nil
+        updatePreviewHeartbeat()
         if isRecording { _ = await stopRecording() }
+        streamOutput?.attachPreviewLayer(nil)
         streamOutput = nil
         output?.setSampleBufferDelegate(nil, queue: nil)
+        hostedPreviewLayer?.session = nil
         guard let session else { return }
         await runOnSessionQueue {
             if session.isRunning { session.stopRunning() }
+            session.beginConfiguration()
+            for input in session.inputs {
+                session.removeInput(input)
+            }
+            for output in session.outputs {
+                session.removeOutput(output)
+            }
+            session.commitConfiguration()
         }
+        if !backendLinkUp { captureDeviceName = nil }
+    }
+
+    private func prepareDiscoveryIfNeeded() {
+        if !cmioCaptureEnabled {
+            Self.enableCMIOCaptureDevices()
+            cmioCaptureEnabled = true
+        }
+        guard discovery == nil else { return }
+        discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.external],
+            mediaType: nil,
+            position: .unspecified
+        )
+    }
+
+    /// Preview-layer mode keeps the data output out of the session until a
+    /// recording or screenshot needs frames. Adding it (instead of leaving a
+    /// disabled connection in the graph) keeps the preview on the device format.
+    private func attachSampleOutput() async -> Bool {
+        guard latchedPreviewMode == .previewLayer else { return false }
+        guard let session, let output = videoOutput else { return false }
+        if sampleOutputAttached { return true }
+        let format = latchedPixelFormat
+        let attached = await runOnSessionQueue { () -> Bool in
+            session.beginConfiguration()
+            let already = session.outputs.contains { $0 === output }
+            if !already {
+                Self.applyRequestedPixelFormat(output, choice: format)
+                guard session.canAddOutput(output) else {
+                    session.commitConfiguration()
+                    return false
+                }
+                session.addOutput(output)
+            }
+            session.commitConfiguration()
+            return true
+        }
+        guard attached else {
+            Self.log.error("video data output was refused")
+            return false
+        }
+        sampleOutputAttached = true
+        frameWatchBaseline = streamOutput?.frameCount ?? 0
+        frameWatchStartedAt = Date()
+        updatePreviewHeartbeat()
+        return true
+    }
+
+    private func detachSampleOutput() async {
+        guard latchedPreviewMode == .previewLayer, sampleOutputAttached,
+              let session, let output = videoOutput else { return }
+        await runOnSessionQueue {
+            session.beginConfiguration()
+            if session.outputs.contains(where: { $0 === output }) {
+                session.removeOutput(output)
+            }
+            session.commitConfiguration()
+        }
+        sampleOutputAttached = false
+        updatePreviewHeartbeat()
+    }
+
+    private func waitForProcessedFrame(after baseline: Int, timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if (streamOutput?.processedCount ?? 0) > baseline,
+               streamOutput?.snapshotLatestPixelBuffer() != nil {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 40_000_000)
+        }
+        return (streamOutput?.processedCount ?? 0) > baseline
+            && streamOutput?.snapshotLatestPixelBuffer() != nil
+    }
+
+    private func applyPreviewConnectionState() {
+        guard latchedPreviewMode == .previewLayer,
+              let connection = hostedPreviewLayer?.connection,
+              connection.isEnabled != wantPreviewConnection else { return }
+        connection.isEnabled = wantPreviewConnection
+    }
+
+    /// Device `activeVideoMinFrameDuration` throws on this muxed CMIO device.
+    /// Only the preview connection is attempted, and only inside the ObjC guard.
+    private func applyPreviewLayerFrameRate() {
+        guard latchedPreviewMode == .previewLayer, !previewRateUnavailable,
+              let connection = hostedPreviewLayer?.connection else { return }
+        let duration = CMTime(value: 1, timescale: CMTimeScale(previewFPS))
+        if appliedPreviewDuration.isValid, CMTimeCompare(appliedPreviewDuration, duration) == 0 { return }
+        var failure: NSString?
+        switch CaptureSetVideoMinFrameDuration(connection, duration, &failure) {
+        case .applied:
+            appliedPreviewDuration = duration
+            Self.perfLog.notice("preview layer frame duration \(self.previewFPS, privacy: .public) fps")
+        case .unsupported, .exception:
+            previewRateUnavailable = true
+            let why = (failure as String?) ?? "unsupported"
+            Self.log.info("preview videoMinFrameDuration unavailable (\(why, privacy: .public)) — preview stays at the device native rate; recording still decimates to \(self.previewFPS, privacy: .public) fps")
+        @unknown default:
+            previewRateUnavailable = true
+        }
+    }
+
+    private func updatePreviewHeartbeat() {
+        let want = isStreaming && latchedPreviewMode == .previewLayer && !sampleOutputAttached
+        if want {
+            guard previewHeartbeat == nil else { return }
+            let timer = Timer(timeInterval: 10, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.logPreviewLayerActive() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            previewHeartbeat = timer
+            return
+        }
+        previewHeartbeat?.invalidate()
+        previewHeartbeat = nil
+    }
+
+    private func logPreviewLayerActive() {
+        guard isStreaming, latchedPreviewMode == .previewLayer, !sampleOutputAttached else { return }
+        Self.perfLog.notice("preview layer active")
     }
 
     /// Prefer the connected Apple TV's name, then any device whose name
     /// contains "apple tv", then the first `modelID` of "iOS Device".
     private func bestCaptureDevice() -> AVCaptureDevice? {
-        let devices = discovery.devices
+        let devices = discovery?.devices ?? []
         let wanted = activeDeviceName?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
@@ -423,6 +741,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     }
 
     private func captureDeviceChanged(_ note: Notification) {
+        guard backendLinkUp else { return }
         let device = note.object as? AVCaptureDevice
         if note.name == AVCaptureDevice.wasDisconnectedNotification, device?.uniqueID == currentDeviceID {
             Self.log.info("capture device disconnected — restarting")
@@ -513,18 +832,36 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         }
     }
 
-    /// `420v` is biplanar video-range YUV. `AVSampleBufferDisplayLayer`
-    /// composites that IOSurface directly, and the H.264 writer accepts it.
-    /// BGRA is not a native capture format — requesting it converts every frame.
-    /// macOS does not expose `availableVideoCVPixelFormatTypes`, so this is
-    /// the one format we ask for.
-    private static func applyDisplayPixelFormat(_ output: AVCaptureVideoDataOutput) {
-        let chosen = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
-        output.videoSettings = [
-            kCVPixelBufferPixelFormatTypeKey as String: NSNumber(value: chosen),
-        ]
-        log.info("capture pixel format \(fourCC(chosen), privacy: .public)")
+    /// `native` is an empty dictionary: the device format passes through
+    /// (2vuy on the Apple TV). `2vuy` and `420v` are explicit requests.
+    /// BGRA is never requested — it is not a native capture format.
+    private static func applyRequestedPixelFormat(_ output: AVCaptureVideoDataOutput, choice: String) {
+        switch choice {
+        case "2vuy":
+            output.videoSettings = [
+                kCVPixelBufferPixelFormatTypeKey as String: NSNumber(value: kCVPixelFormatType_422YpCbCr8),
+            ]
+        case "420v":
+            output.videoSettings = [
+                kCVPixelBufferPixelFormatTypeKey as String: NSNumber(value: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
+            ]
+        default:
+            output.videoSettings = [:]
+        }
     }
+
+    nonisolated static func resolvedPixelFormat(_ raw: String?) -> String {
+        switch raw {
+        case "2vuy", "420v": return raw ?? "native"
+        default: return "native"
+        }
+    }
+
+    nonisolated static func resolvedPreviewMode(_ raw: String?) -> CapturePreviewMode {
+        raw == CapturePreviewMode.sampleBuffer.rawValue ? .sampleBuffer : .previewLayer
+    }
+
+    private static let noFrameMessage = "No frame available yet — is the Apple TV screen connected?"
 
     nonisolated fileprivate static func fourCC(_ code: OSType) -> String {
         let bytes = [
@@ -632,6 +969,9 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         guard fps != previewFPS else { return }
         previewFPS = fps
         streamOutput?.setPreviewFPS(fps)
+        appliedPreviewDuration = .invalid
+        previewRateUnavailable = false
+        applyPreviewLayerFrameRate()
         Self.perfLog.notice("preview fps \(fps, privacy: .public)")
     }
 
@@ -704,6 +1044,18 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 
     private func deliverPreviewPolicy() async {
         let visible = previewVisible
+        if latchedPreviewMode == .previewLayer {
+            // Disabling the preview connection keeps the wireless device open.
+            // stopRunning would drop it, and the next frame would take seconds.
+            streamOutput?.setEnqueuesPreview(false)
+            let pausePreview = !visible && !isRecording && !recordingNeedsFullRate
+            wantPreviewConnection = visible
+            applyPreviewConnectionState()
+            streamOutput?.setSkipsProcessing(pausePreview)
+            previewThrottled = pausePreview
+            logPreviewDeliveryIfChanged()
+            return
+        }
         streamOutput?.setEnqueuesPreview(visible)
         guard isStreaming, captureDevice != nil else {
             logPreviewDeliveryIfChanged()
@@ -771,6 +1123,8 @@ final class CaptureCoordinator: NSObject, ObservableObject {
 
     // MARK: - PNG encoding
 
+    /// CIImage accepts the device format, including 2vuy and 420v, so the PNG
+    /// path does not convert the buffer before this call.
     private static nonisolated func writePNG(pixelBuffer: CVPixelBuffer, to url: URL) throws {
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         guard let cg = CIContext(options: [.useSoftwareRenderer: false])
@@ -886,6 +1240,20 @@ final class StreamOutputAdapter: NSObject, AVCaptureVideoDataOutputSampleBufferD
         return _frameCount
     }
     private var _frameCount = 0
+
+    /// Frames whose pixel buffer was retained. Screenshot and recording wait
+    /// on this, not on raw `frameCount`, so a skipped buffer cannot satisfy them.
+    var processedCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return _processedCount
+    }
+    private var _processedCount = 0
+    private var formatDescription: CMFormatDescription?
+
+    func sourceFormatHint() -> CMFormatDescription? {
+        lock.lock(); defer { lock.unlock() }
+        return formatDescription
+    }
     private var perfIntervalStart = Date()
     private var rawInInterval = 0
     private var keptInInterval = 0
@@ -929,6 +1297,10 @@ final class StreamOutputAdapter: NSObject, AVCaptureVideoDataOutputSampleBufferD
         if !skipWork {
             if throttled { lastProcessedAt = now }
             latestPixelBuffer = pixelBuffer
+            _processedCount += 1
+            if let description = CMSampleBufferGetFormatDescription(sampleBuffer) {
+                formatDescription = description
+            }
             pixelSize = CGSize(
                 width: CVPixelBufferGetWidth(pixelBuffer),
                 height: CVPixelBufferGetHeight(pixelBuffer)

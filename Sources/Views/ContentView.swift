@@ -43,14 +43,17 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             startCapturePolling()
-            capture.setActiveDevice(name: client.connectedDevice?.name)
+            capture.updateBackendLink(connected: client.connected, deviceName: client.connectedDevice?.name)
         }
         .onDisappear { stopCapturePolling() }
         .onChange(of: client.keyboard) { _, new in handleKeyboardChange(new) }
-        // The screen follows the selected Apple TV: connecting (or switching)
-        // a device retargets the capture device automatically.
-        .onChange(of: client.connectedDevice) { _, device in
-            capture.setActiveDevice(name: device?.name)
+        // The screen follows the Apple TV connection. CMIO and the capture
+        // session stay down until the backend reports connected.
+        .onChange(of: client.connected) { _, connected in
+            capture.updateBackendLink(connected: connected, deviceName: client.connectedDevice?.name)
+        }
+        .onChange(of: client.connectedDevice?.name) { _, name in
+            capture.updateBackendLink(connected: client.connected, deviceName: name)
         }
         // When another sheet blocked the auto-open, retry once it dismisses.
         .onChange(of: showDevicePicker) { _, shown in if !shown { retryKeyboardAutoOpen() } }
@@ -85,8 +88,8 @@ struct ContentView: View {
     private var stage: some View {
         ZStack {
             Color.black
-            if capture.isStreaming, let adapter = capture.streamOutput {
-                SampleBufferPreview(adapter: adapter)
+            if capture.isStreaming {
+                capturePreview
             } else {
                 stagePlaceholder
             }
@@ -97,6 +100,17 @@ struct ContentView: View {
             }
         }
         .padding(12)
+    }
+
+    @ViewBuilder
+    private var capturePreview: some View {
+        if capture.latchedPreviewMode == .sampleBuffer, let adapter = capture.streamOutput {
+            SampleBufferPreview(adapter: adapter)
+        } else if let session = capture.previewSession {
+            PreviewLayerHost(session: session) { layer in
+                capture.notePreviewLayer(layer)
+            }
+        }
     }
 
     private var stagePlaceholder: some View {
@@ -301,7 +315,7 @@ struct ContentView: View {
                 await capture.startIfPossible()
                 // Healthy means a frame has already arrived. Until then the
                 // poll is what opens the capture device and starts the session.
-                let streamingHealthy = capture.isStreaming && (capture.streamOutput?.frameCount ?? 0) > 0
+                let streamingHealthy = capture.feedIsHealthy
                 let pauseNs: UInt64 = streamingHealthy ? 5_000_000_000 : 2_000_000_000
                 try? await Task.sleep(nanoseconds: pauseNs)
             }
@@ -353,6 +367,103 @@ struct ContentView: View {
             showKeyboard = false
             keyboardAutoOpened = false
         }
+    }
+}
+
+/// Hosts `AVCaptureVideoPreviewLayer` as the view's backing layer. The session
+/// pushes frames; SwiftUI does not re-render per frame. No filters, mask, or
+/// corner radius — those force an offscreen pass.
+private struct PreviewLayerHost: NSViewRepresentable {
+    let session: AVCaptureSession
+    let onLayer: (AVCaptureVideoPreviewLayer) -> Void
+
+    func makeNSView(context: Context) -> PreviewLayerView {
+        let view = PreviewLayerView()
+        view.attach(session: session, onLayer: onLayer)
+        return view
+    }
+
+    func updateNSView(_ nsView: PreviewLayerView, context: Context) {
+        nsView.attach(session: session, onLayer: onLayer)
+    }
+
+    static func dismantleNSView(_ nsView: PreviewLayerView, coordinator: ()) {
+        nsView.detach()
+    }
+}
+
+private final class PreviewLayerView: NSView {
+    private var onLayer: ((AVCaptureVideoPreviewLayer) -> Void)?
+
+    override var isOpaque: Bool { true }
+
+    func attach(session: AVCaptureSession, onLayer: @escaping (AVCaptureVideoPreviewLayer) -> Void) {
+        self.onLayer = onLayer
+        wantsLayer = true
+        clipsToBounds = false
+        let preview = (layer as? AVCaptureVideoPreviewLayer) ?? AVCaptureVideoPreviewLayer(session: session)
+        if layer !== preview {
+            layer = preview
+            prepare(preview)
+        }
+        if preview.session !== session {
+            preview.session = session
+        }
+        syncGeometry(preview)
+        onLayer(preview)
+    }
+
+    func detach() {
+        onLayer = nil
+        (layer as? AVCaptureVideoPreviewLayer)?.session = nil
+    }
+
+    override func layout() {
+        super.layout()
+        guard let preview = layer as? AVCaptureVideoPreviewLayer else { return }
+        syncGeometry(preview)
+        onLayer?(preview)
+        makeWindowOpaque()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        makeWindowOpaque()
+        guard let preview = layer as? AVCaptureVideoPreviewLayer else { return }
+        syncGeometry(preview)
+        onLayer?(preview)
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        guard let preview = layer as? AVCaptureVideoPreviewLayer else { return }
+        syncGeometry(preview)
+    }
+
+    private func prepare(_ preview: AVCaptureVideoPreviewLayer) {
+        preview.videoGravity = .resizeAspect
+        preview.backgroundColor = NSColor.black.cgColor
+        preview.isOpaque = true
+        preview.cornerRadius = 0
+        preview.masksToBounds = false
+        preview.shadowOpacity = 0
+        syncGeometry(preview)
+    }
+
+    private func syncGeometry(_ preview: AVCaptureVideoPreviewLayer) {
+        preview.frame = bounds
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        if preview.contentsScale != scale {
+            preview.contentsScale = scale
+        }
+    }
+
+    private func makeWindowOpaque() {
+        guard let window else { return }
+        let clear = window.backgroundColor == nil || window.backgroundColor == .clear
+        guard !window.isOpaque || clear else { return }
+        window.isOpaque = true
+        window.backgroundColor = .black
     }
 }
 

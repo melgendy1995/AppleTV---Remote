@@ -37,7 +37,7 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    Text("Applies to the live preview and to recordings without reconnecting.")
+                    Text("Recordings always use this rate. The preview uses it when that path can limit its frame rate.")
                         .font(.system(size: 12))
                         .foregroundColor(Theme.muted)
 

@@ -24,6 +24,7 @@
 		F718ECBDE723588278EA58C4 /* RemoteControlsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5E3D62E33164449BB8B5692 /* RemoteControlsView.swift */; };
 		F98D4D5D182357C97E217B2D /* NowPlayingCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8696576F2F249DF508C1A15 /* NowPlayingCard.swift */; };
 		FC20ECB5FE191C5B7E30DF1A /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84812F8ADF6CB8FC64A15C44 /* PairingView.swift */; };
+		C0FFEE01A11B22C33D44E501 /* CaptureExceptionGuard.m in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE01A11B22C33D44E502 /* CaptureExceptionGuard.m */; settings = {COMPILER_FLAGS = "-fobjc-arc-exceptions"; }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -45,6 +46,9 @@
 		ECD6878F780BB6E599861E65 /* AppleTVRemoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleTVRemoteApp.swift; sourceTree = "<group>"; };
 		F1722738B6B84E7FF556E3DF /* BackendClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendClient.swift; sourceTree = "<group>"; };
 		F6DF5CE186C83DA42B93E94A /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		C0FFEE01A11B22C33D44E502 /* CaptureExceptionGuard.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = CaptureExceptionGuard.m; sourceTree = "<group>"; };
+		C0FFEE01A11B22C33D44E503 /* CaptureExceptionGuard.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = CaptureExceptionGuard.h; sourceTree = "<group>"; };
+		C0FFEE01A11B22C33D44E504 /* AppleTVRemote-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "AppleTVRemote-Bridging-Header.h"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -101,6 +105,7 @@
 			isa = PBXGroup;
 			children = (
 				ECD6878F780BB6E599861E65 /* AppleTVRemoteApp.swift */,
+				C0FFEE01A11B22C33D44E504 /* AppleTVRemote-Bridging-Header.h */,
 				B233322FCC76A0C5A9E6081B /* Assets.xcassets */,
 				ABFF0B513C774FF636430B5B /* Models */,
 				5043DCC7860137A5D3F04484 /* Networking */,
@@ -114,6 +119,8 @@
 			isa = PBXGroup;
 			children = (
 				3360AE8CBA0045C9C68B62AB /* CaptureCoordinator.swift */,
+				C0FFEE01A11B22C33D44E503 /* CaptureExceptionGuard.h */,
+				C0FFEE01A11B22C33D44E502 /* CaptureExceptionGuard.m */,
 				AA11BB22CC33DD44EE55FF02 /* QuickTimeController.swift */,
 				DC555105E385DBE39A3BF821 /* VideoRecorder.swift */,
 			);
@@ -207,6 +214,7 @@
 				01ED369074EEF82DFA621843 /* SettingsView.swift in Sources */,
 				B263790F30E8BA5B5DDA9998 /* Theme.swift in Sources */,
 				D01A43E78A1AE605ABB1629D /* VideoRecorder.swift in Sources */,
+				C0FFEE01A11B22C33D44E501 /* CaptureExceptionGuard.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -288,9 +296,14 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/Sources/ScreenCapture",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.2.3;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/AppleTVRemote-Bridging-Header.h";
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "Apple TV Remote";
@@ -353,9 +366,14 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/Sources/ScreenCapture",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.2.3;
 				MTL_ENABLE_DEBUG_INFO = NO;
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/AppleTVRemote-Bridging-Header.h";
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "Apple TV Remote";
 				SDKROOT = macosx;

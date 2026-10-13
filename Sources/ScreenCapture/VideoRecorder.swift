@@ -7,8 +7,10 @@ import Foundation
 /// (the internal serial queue linearises appends and lifecycle transitions).
 /// Presentation timestamps may be variable. The capture delegate keeps frames
 /// at the selected preview rate, and the writer drops buffers it cannot accept
-/// in time. Sample buffers are appended as captured (`420v`). There is no
-/// pixel-buffer adaptor and no BGRA conversion.
+/// in time. Sample buffers are appended as captured (`2vuy`, `420v`, or
+/// whatever the device delivered). There is no pixel-buffer adaptor and no
+/// BGRA conversion. `sourceFormatHint` is the buffer's own format description
+/// so the H.264 input does not assume a pixel format.
 final class VideoRecorder: @unchecked Sendable {
 
     private enum State { case ready, writing, finishing, finished }
@@ -21,7 +23,7 @@ final class VideoRecorder: @unchecked Sendable {
     private var lastAcceptedPTS: CMTime = .invalid
     let outputURL: URL
 
-    init(url: URL, pixelSize: CGSize, framesPerSecond: Int) throws {
+    init(url: URL, pixelSize: CGSize, framesPerSecond: Int, sourceFormatHint: CMFormatDescription? = nil) throws {
         self.outputURL = url
         try? FileManager.default.removeItem(at: url)
 
@@ -42,7 +44,10 @@ final class VideoRecorder: @unchecked Sendable {
                 AVVideoMaxKeyFrameIntervalKey: framesPerSecond * 2,
             ],
         ]
-        let input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
+        let hint = sourceFormatHint.flatMap { description -> CMFormatDescription? in
+            CMFormatDescriptionGetMediaType(description) == kCMMediaType_Video ? description : nil
+        }
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: settings, sourceFormatHint: hint)
         input.expectsMediaDataInRealTime = true
         guard writer.canAdd(input) else {
             throw NSError(domain: "VideoRecorder", code: 1,
