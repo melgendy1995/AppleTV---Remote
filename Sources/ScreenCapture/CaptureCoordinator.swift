@@ -32,9 +32,11 @@ enum CapturePreviewMode: String {
 /// `previewLayer` mode the preview connection's `videoMinFrameDuration` is
 /// set only when `isVideoMinFrameDurationSupported` says so; if that is
 /// unsupported or throws, the preview stays at the device rate. When
-/// UserDefaults `dataOutputFrameLimit` is true (default false), the same
+/// UserDefaults `dataOutputFrameLimit` is true (default true), the same
 /// guard sets the video-data-output connection to 1/`previewFPS` after that
-/// output is added. Software decimation is unchanged.
+/// output is added. Software decimation is unchanged. The default is on
+/// because an on-device A/B showed lower app CPU (about 3 points), helpers
+/// unchanged, raw frames 60 to 30, applied=true, and no errors.
 ///
 /// `previewLayer` does not run `AVCaptureVideoDataOutput` while only the
 /// preview is showing. The output is added for a recording, and for one
@@ -104,8 +106,10 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     static let previewFPSDefaultsKey = "previewFPS"
     static let capturePixelFormatDefaultsKey = "capturePixelFormat"
     static let previewModeDefaultsKey = "previewMode"
-    /// Off unless set. Read when the session starts and when the data output
-    /// is attached. Does not change device frame durations.
+    /// On by default. On-device A/B: app CPU about 3 points lower, helpers
+    /// unchanged, raw frames 60 to 30, applied=true, no errors. Read when the
+    /// session starts and when the data output is attached. Does not change
+    /// device frame durations.
     static let dataOutputFrameLimitDefaultsKey = "dataOutputFrameLimit"
     /// 30 or 60. Pushed into the live sample adapter; not a session rebuild.
     private var previewFPS = 30
@@ -147,7 +151,7 @@ final class CaptureCoordinator: NSObject, ObservableObject {
             Self.previewFPSDefaultsKey: 30,
             Self.capturePixelFormatDefaultsKey: "2vuy",
             Self.previewModeDefaultsKey: CapturePreviewMode.sampleBuffer.rawValue,
-            Self.dataOutputFrameLimitDefaultsKey: false,
+            Self.dataOutputFrameLimitDefaultsKey: true,
         ])
         previewFPS = Self.clampedPreviewFPS(UserDefaults.standard.integer(forKey: Self.previewFPSDefaultsKey))
         observeCaptureDevices()
