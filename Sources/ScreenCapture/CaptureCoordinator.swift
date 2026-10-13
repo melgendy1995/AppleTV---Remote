@@ -16,8 +16,9 @@ enum CapturePreviewMode: String {
 /// Mirrors the Apple TV by opening its CMIO screen-capture device with
 /// `AVCaptureSession`. QuickTime is not launched and ScreenCaptureKit is not
 /// used. PNG screenshots and the MP4 recorder share the sample buffers.
-/// The preview is either an `AVCaptureVideoPreviewLayer` (`previewMode` =
-/// `previewLayer`, the default) or the sample-buffer layer (`sampleBuffer`).
+/// The preview is either the sample-buffer layer (`previewMode` =
+/// `sampleBuffer`, the default) or an `AVCaptureVideoPreviewLayer`
+/// (`previewLayer`, optional).
 ///
 /// CMIO screen-capture flags and the capture session stay off until
 /// `BackendClient` reports a connection. Disconnect stops the session and
@@ -102,10 +103,10 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     static let previewModeDefaultsKey = "previewMode"
     /// 30 or 60. Pushed into the live sample adapter; not a session rebuild.
     private var previewFPS = 30
-    /// Latched when a session opens. `native` writes an empty `videoSettings`
-    /// dictionary so the device format (2vuy on this Apple TV) passes through.
-    private(set) var latchedPixelFormat = "native"
-    private(set) var latchedPreviewMode: CapturePreviewMode = .previewLayer
+    /// Latched when a session opens. `2vuy` or `420v`. `native` is stored as
+    /// `2vuy` because an empty `videoSettings` delivers no sample buffers.
+    private(set) var latchedPixelFormat = "2vuy"
+    private(set) var latchedPreviewMode: CapturePreviewMode = .sampleBuffer
     /// True only while the video data output is in the running session.
     /// Preview-layer streaming leaves it false.
     private var sampleOutputAttached = false
@@ -138,8 +139,8 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         permissionGranted = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
         UserDefaults.standard.register(defaults: [
             Self.previewFPSDefaultsKey: 30,
-            Self.capturePixelFormatDefaultsKey: "native",
-            Self.previewModeDefaultsKey: CapturePreviewMode.previewLayer.rawValue,
+            Self.capturePixelFormatDefaultsKey: "2vuy",
+            Self.previewModeDefaultsKey: CapturePreviewMode.sampleBuffer.rawValue,
         ])
         previewFPS = Self.clampedPreviewFPS(UserDefaults.standard.integer(forKey: Self.previewFPSDefaultsKey))
         observeCaptureDevices()
@@ -832,33 +833,36 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         }
     }
 
-    /// `native` is an empty dictionary: the device format passes through
-    /// (2vuy on the Apple TV). `2vuy` and `420v` are explicit requests.
-    /// BGRA is never requested — it is not a native capture format.
+    /// `2vuy` and `420v` are explicit requests. `native` and anything else
+    /// are `2vuy`: an empty `videoSettings` dictionary delivers no frames to
+    /// `AVCaptureVideoDataOutput` on this Apple TV (measured on device).
+    /// BGRA is never requested — it is not a device capture format.
     private static func applyRequestedPixelFormat(_ output: AVCaptureVideoDataOutput, choice: String) {
         switch choice {
-        case "2vuy":
-            output.videoSettings = [
-                kCVPixelBufferPixelFormatTypeKey as String: NSNumber(value: kCVPixelFormatType_422YpCbCr8),
-            ]
         case "420v":
             output.videoSettings = [
                 kCVPixelBufferPixelFormatTypeKey as String: NSNumber(value: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
             ]
         default:
-            output.videoSettings = [:]
+            // "native" (empty videoSettings) yields no sample buffers.
+            output.videoSettings = [
+                kCVPixelBufferPixelFormatTypeKey as String: NSNumber(value: kCVPixelFormatType_422YpCbCr8),
+            ]
         }
     }
 
     nonisolated static func resolvedPixelFormat(_ raw: String?) -> String {
         switch raw {
-        case "2vuy", "420v": return raw ?? "native"
-        default: return "native"
+        case "420v": return "420v"
+        // "native" used to mean an empty videoSettings dictionary. That path
+        // delivers no frames to AVCaptureVideoDataOutput, so it is 2vuy.
+        case "2vuy", "native": return "2vuy"
+        default: return "2vuy"
         }
     }
 
     nonisolated static func resolvedPreviewMode(_ raw: String?) -> CapturePreviewMode {
-        raw == CapturePreviewMode.sampleBuffer.rawValue ? .sampleBuffer : .previewLayer
+        raw == CapturePreviewMode.previewLayer.rawValue ? .previewLayer : .sampleBuffer
     }
 
     private static let noFrameMessage = "No frame available yet — is the Apple TV screen connected?"
