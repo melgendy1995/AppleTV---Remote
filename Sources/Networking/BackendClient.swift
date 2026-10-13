@@ -28,6 +28,15 @@ final class BackendClient: ObservableObject {
     private var autoConnectSuppressed = false
     private var autoConnectInFlight = false
     private var autoConnectCooldownUntil: Date?
+    /// Watches `/api/status` because a manual disconnect does not broadcast
+    /// a websocket `disconnected` frame (that type is only emitted when pyatv
+    /// reports the link lost). Without this, `connected` stays true and the
+    /// capture session keeps the device open.
+    private var statusWatch: Task<Void, Never>?
+
+    init() {
+        ensureStatusWatch()
+    }
 
     /// True when this device-row represents the Apple TV we're currently
     /// connected to. `connectedDevice` can be nil (a restored status only
@@ -103,14 +112,7 @@ final class BackendClient: ObservableObject {
             backendReachable = true
             if s.connected, let ident = s.identifier {
                 lastConnectedIdentifier = ident
-                if let saved = try? await fetchSaved() {
-                    savedDevices = saved
-                    if let entry = saved[ident] {
-                        connectedDevice = DeviceInfo(
-                            identifier: ident, name: entry.name, address: "",
-                            model: nil, services: Array(entry.credentials.keys), isPaired: true)
-                    }
-                }
+                await assignConnectedDevice(ident)
                 connected = true
                 await refreshPlaying()
                 openWebSocket()
@@ -339,6 +341,76 @@ final class BackendClient: ObservableObject {
 
     func keyboardSnapshot() async -> KeyboardEvent? {
         try? await request("GET", "api/keyboard")
+    }
+
+    // MARK: - Out-of-band link watch
+
+    private func ensureStatusWatch() {
+        guard statusWatch == nil else { return }
+        statusWatch = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard !Task.isCancelled, let self else { return }
+                await self.syncLinkFromStatus()
+            }
+        }
+    }
+
+    /// A failed or timed-out read is skipped. The backend being unreachable
+    /// is not an Apple TV disconnect, and this loop has to keep running.
+    private func syncLinkFromStatus() async {
+        let status: StatusResponse
+        do {
+            status = try await fetchLinkStatus()
+        } catch {
+            return
+        }
+        backendReachable = true
+        if status.connected, let identifier = status.identifier {
+            await noteBackendConnected(identifier)
+        } else if connected {
+            connected = false
+            connectedDevice = nil
+        }
+    }
+
+    private func fetchLinkStatus() async throws -> StatusResponse {
+        guard let url = buildURL("api/status") else { throw URLError(.badURL) }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 2
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        return try JSONDecoder().decode(StatusResponse.self, from: data)
+    }
+
+    private func noteBackendConnected(_ identifier: String) async {
+        let wasConnected = connected
+        lastConnectedIdentifier = identifier
+        if connectedDevice?.identifier != identifier {
+            await assignConnectedDevice(identifier)
+        }
+        guard !wasConnected else { return }
+        connected = true
+        if wsTask == nil { openWebSocket() }
+        await refreshPlaying()
+    }
+
+    /// A failed saved-device read leaves `connectedDevice` as it was. The link
+    /// can still be up; capture then matches any Apple TV device.
+    private func assignConnectedDevice(_ identifier: String) async {
+        let saved: [String: SavedDeviceEntry]
+        do {
+            saved = try await fetchSaved()
+        } catch {
+            return
+        }
+        savedDevices = saved
+        guard let entry = saved[identifier] else { return }
+        connectedDevice = DeviceInfo(
+            identifier: identifier, name: entry.name, address: "",
+            model: nil, services: Array(entry.credentials.keys), isPaired: true)
     }
 
     // MARK: - WebSocket
