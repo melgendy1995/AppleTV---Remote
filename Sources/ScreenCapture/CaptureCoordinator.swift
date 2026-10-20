@@ -21,9 +21,12 @@ enum CapturePreviewMode: String {
 /// (`previewLayer`, optional).
 ///
 /// CMIO screen-capture flags and the capture session stay off until
-/// `BackendClient` reports a connection. Disconnect stops the session and
-/// removes the device input. The next connect builds a new session and reads
-/// `capturePixelFormat` and `previewMode` again.
+/// `BackendClient` reports a connection. A new connection turns the screen
+/// stream on. Turning it off stops the session and keeps it from being
+/// opened again until the switch is on or another connection starts.
+/// Disconnect stops the session and removes the device input. The next
+/// connect builds a new session and reads `capturePixelFormat` and
+/// `previewMode` again.
 ///
 /// The device delivers about 60 fps and rejects `activeVideoMinFrameDuration`
 /// / `activeVideoMaxFrameDuration` (muxed-only, no frame-rate ranges). Those
@@ -55,6 +58,9 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     /// `localizedName` of the capture device the session is aimed at.
     @Published private(set) var captureDeviceName: String?
     @Published private(set) var isStreaming: Bool = false
+    /// Screen mirror. Each new Apple TV connection sets this to true.
+    /// While false, no capture session is opened and the TV screen is not read.
+    @Published private(set) var streamEnabled: Bool = true
     @Published private(set) var isRecording: Bool = false
     @Published private(set) var recordingElapsed: TimeInterval = 0
     @Published private(set) var recordingFileSize: UInt64 = 0
@@ -191,6 +197,21 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         }
     }
 
+    /// Settings switch. Off tears the capture session down immediately.
+    /// On opens it again when an Apple TV is already connected.
+    func setStreamEnabled(_ enabled: Bool) {
+        guard enabled != streamEnabled else { return }
+        streamEnabled = enabled
+        if enabled {
+            if ensurePermission() {
+                Task { await self.startIfPossible() }
+            }
+        } else {
+            lastError = nil
+            Task { await self.performSessionWork { await self.stopStream() } }
+        }
+    }
+
     /// Open the best Apple TV capture device, or leave an already-healthy
     /// session alone. Safe to call on a timer.
     func startIfPossible() async {
@@ -218,9 +239,15 @@ final class CaptureCoordinator: NSObject, ObservableObject {
         if trimmed.isEmpty, backendLinkUp { return }
         let name = trimmed.isEmpty ? nil : trimmed
         let becameConnected = !backendLinkUp
+        let switchedDevice = name != nil && activeDeviceName != nil && name != activeDeviceName
         let nameChanged = name != activeDeviceName
         backendLinkUp = true
         activeDeviceName = name
+        // A new link, or a different Apple TV on the same link, starts with
+        // the screen stream on. The settings switch can turn it off afterward.
+        if becameConnected || switchedDevice {
+            if !streamEnabled { streamEnabled = true }
+        }
         guard becameConnected || nameChanged else { return }
         if becameConnected { didFocusOnConnect = false }
         Task { await self.startIfPossible() }
@@ -426,6 +453,11 @@ final class CaptureCoordinator: NSObject, ObservableObject {
     }
 
     private func startIfPossibleNow() async {
+        guard streamEnabled else {
+            pollNote("screen stream off")
+            if isStreaming || session != nil { await stopStream() }
+            return
+        }
         guard backendLinkUp else {
             pollNote("waiting for Apple TV connection")
             if isStreaming || session != nil { await stopStream() }

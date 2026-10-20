@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject private var client: BackendClient
+    @EnvironmentObject private var capture: CaptureCoordinator
     @Environment(\.dismiss) private var dismiss
 
     @State private var draft: String = ""
@@ -27,6 +28,20 @@ struct SettingsView: View {
                     Text("Examples: `http://localhost:8000`, `http://192.168.1.20:8000`. Use the LAN IP of the machine running the FastAPI backend.")
                         .font(.system(size: 12))
                         .foregroundColor(Theme.muted)
+
+                    Toggle(isOn: streamEnabled) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Screen stream")
+                                .font(.system(size: 15))
+                                .foregroundColor(Theme.text)
+                            Text("Turns on when you connect. Off stops the app from acquiring the Apple TV screen until you turn it on or connect again.")
+                                .font(.system(size: 12))
+                                .foregroundColor(Theme.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .tint(Theme.accent)
 
                     Text("Preview frame rate")
                         .font(.system(size: 12))
@@ -67,6 +82,13 @@ struct SettingsView: View {
         }
         .preferredColorScheme(.dark)
         .onAppear { draft = client.backendURLString }
+    }
+
+    private var streamEnabled: Binding<Bool> {
+        Binding(
+            get: { capture.streamEnabled },
+            set: { capture.setStreamEnabled($0) }
+        )
     }
 
     private func normalize(_ raw: String) -> String? {

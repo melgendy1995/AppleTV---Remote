@@ -72,6 +72,7 @@ struct ContentView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView()
                 .environmentObject(client)
+                .environmentObject(capture)
         }
         .sheet(isPresented: $showKeyboard) {
             KeyboardView()
@@ -115,7 +116,19 @@ struct ContentView: View {
 
     private var stagePlaceholder: some View {
         VStack(spacing: 10) {
-            if !capture.permissionGranted {
+            if !capture.streamEnabled {
+                Text("Screen stream is off")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(Theme.text)
+                Text("The Apple TV screen is not being acquired. Turn the stream on in Settings, or connect again to start it.")
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.muted)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 380)
+                Button("Settings") { showSettings = true }
+                    .buttonStyle(SurfaceButton())
+                    .frame(width: 180)
+            } else if !capture.permissionGranted {
                 Text("Camera permission required")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundColor(Theme.text)
